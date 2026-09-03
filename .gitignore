@@ -1,0 +1,28 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+
+# --- Ortam / gizli bilgiler (ASLA repoya girmez) ---
+.env
+.env.*
+!.env.example
+
+# --- Veritabanı ve veri dosyaları ---
+data/*
+!data/.gitkeep
+
+# --- IDE / işletim sistemi ---
+.idea/
+.vscode/
+.DS_Store
+
+# --- Test / araç önbellekleri ---
+.pytest_cache/
+.ruff_cache/
+
+# Not: uv.lock commit'lenir (dokunmayın)
