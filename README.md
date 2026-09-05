@@ -27,7 +27,7 @@ belirleyeceğiniz eşik, ör. 3 veya 5) bir coin aldığında **Telegram bildiri
 | 0 | Repo kurulumu, Python ortamı, mimari iskelet | ✅ |
 | 1 | Veri katmanı: erken alıcılar + transfer/swap geçmişi (Robinhood Chain, EVM RPC) | ✅ (erken alıcılar; swap geçmişi Faz 2'de) |
 | 2 | Filtre motoru: bot tespiti, kaçak satış kuralları (büyüyebilir kural seti) | ✅ (fiyat-bağımsız kurallar; P&L bazlı zenginleştirme Faz 3'te) |
-| 3 | Skorlama & sıralama: kazanma oranı, P&L, işlem sıklığı | ⏳ |
+| 3 | Skorlama & sıralama: kazanma oranı, P&L, işlem sıklığı | ✅ (fiyat-bağımsız; USD P&L Faz 4+ta) |
 | 4 | Streamlit paneli: smart wallet listesini tarayıcıda görüntüleme | ⏳ |
 | 5 | Telegram bildirim botu: "≥ N smart wallet aynı coini aldı" eşik uyarısı | ⏳ |
 | 6 | Oracle Free VPS'e 7/24 dağıtım (systemd) + Solana ve diğer EVM ağları | ⏳ |
@@ -58,6 +58,7 @@ uv sync                # Python 3.12 sanal ortamını kurar, bağımlılıkları
 uv run avimsin-rpc     # RPC uçlarını hız/doğruluk açısından yarıştırır
 uv run avimsin-scan <token> --from-block <blok>   # erken alıcıları topla, SQLite'a yaz
 uv run avimsin-filter <token>   # alıcıları bot/kaçak satış kurallarından geçir
+uv run avimsin-score <token>    # temiz cüzdanları winrate/P&L/frekans ile sırala
 ```
 
 ## RPC Stratejisi

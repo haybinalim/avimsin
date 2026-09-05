@@ -29,6 +29,14 @@ CREATE TABLE IF NOT EXISTS purchases (
     PRIMARY KEY (coin, tx, wallet)
 );
 CREATE INDEX IF NOT EXISTS idx_purchases_coin_block ON purchases (coin, block);
+CREATE TABLE IF NOT EXISTS scores (
+    wallet TEXT PRIMARY KEY,
+    winrate REAL NOT NULL,
+    net_pnl INTEGER NOT NULL,
+    trades INTEGER NOT NULL,
+    frequency REAL NOT NULL,
+    score REAL NOT NULL
+);
 """
 
 # Faz 2'den önce oluşturulan veritabanlarına verdict kolonlarını ekler.
@@ -79,4 +87,21 @@ def save_verdict(conn: sqlite3.Connection, wallet: str, verdict: str, rule: str,
     conn.execute(
         "UPDATE wallets SET verdict = ?, verdict_rule = ?, verdict_reason = ? WHERE address = ?",
         (verdict, rule, reason, wallet.lower()),
+    )
+
+
+def save_score(
+    conn: sqlite3.Connection,
+    wallet: str,
+    winrate: float,
+    net_pnl: int,
+    trades: int,
+    frequency: float,
+    score: float,
+) -> None:
+    """Skor tablosuna yazar veya günceller."""
+    conn.execute(
+        "INSERT OR REPLACE INTO scores (wallet, winrate, net_pnl, trades, frequency, score)"
+        " VALUES (?, ?, ?, ?, ?, ?)",
+        (wallet.lower(), winrate, net_pnl, trades, frequency, score),
     )
