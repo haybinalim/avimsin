@@ -17,6 +17,7 @@ class TransferEvent:
     to: str
     block: int
     tx: str
+    value: int = 0  # ham token birimi (18 ondalıklıysa wei gibi)
 
 
 def token_transfers(client: EvmClient, token: str, from_block: int, to_block: int) -> list[TransferEvent]:
@@ -33,6 +34,7 @@ def token_transfers(client: EvmClient, token: str, from_block: int, to_block: in
                 to="0x" + topics[2][-40:],
                 block=int(log["blockNumber"], 16),
                 tx=log["transactionHash"],
+                value=int(log.get("data", "0x0") or "0x0", 16),
             )
         )
     events.sort(key=lambda e: (e.block, e.tx))
