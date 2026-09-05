@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import time
+from collections import deque
 from typing import Any
 
 import httpx
@@ -27,9 +28,11 @@ MAX_RETRIES = 8
 BASE_WAIT = 0.5
 RETRYABLE_STATUS = {429, 502, 503, 504}
 
-# RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar ("log query timed out"
-# gibi): HTTP 200 + JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer.
-RETRYABLE_MESSAGES = ("timed out", "rate limit", "too many requests")
+# RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
+# JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
+# out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
+# iter_logs aralığı yarıya bölerek çözer.
+RETRYABLE_MESSAGES = ("rate limit", "too many requests")
 
 
 class EvmClient:
@@ -44,8 +47,8 @@ class EvmClient:
         """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
 
         429/502/503/504 yanıtlarında ``Retry-After`` başlığına uyar, yoksa
-        üstel geri çekilmeyle yeniden dener. "log query timed out" gibi
-        sunucu tarafı geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular.
+        üstel geri çekilmeyle yeniden dener. "rate limit" gibi sunucu tarafı
+        geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular.
         """
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
@@ -94,13 +97,30 @@ class EvmClient:
     def iter_logs(
         self, from_block: int, to_block: int, topics: list[str], address: str | None = None
     ) -> Iterator[dict]:
-        """Büyük aralıkları LOG_CHUNK parçalarına bölerek logları sırayla verir."""
-        start = from_block
-        while start <= to_block:
-            end = min(start + LOG_CHUNK - 1, to_block)
-            yield from self.get_logs(start, end, topics, address)
-            start = end + 1
-            if start <= to_block:
+        """Büyük aralıkları LOG_CHUNK parçalarına bölerek logları sırayla verir.
+
+        "query timed out" dönen parça, aralık yarıya bölerek yeniden denenir:
+        yoğun token'larda geniş aralık sunucunun işleme süresini aşıyor.
+        """
+        todo: deque[tuple[int, int]] = deque([(from_block, to_block)])
+        while todo:
+            start, end = todo.popleft()
+            if start > end:
+                continue
+            next_end = min(start + LOG_CHUNK - 1, end)
+            try:
+                logs = self.get_logs(start, next_end, topics, address)
+            except RuntimeError as exc:
+                if "timed out" in str(exc).lower() and start < next_end:
+                    mid = (start + next_end) // 2
+                    todo.append((next_end + 1, end))
+                    todo.appendleft((mid + 1, next_end))
+                    todo.appendleft((start, mid))
+                    continue
+                raise
+            yield from logs
+            todo.append((next_end + 1, end))
+            if next_end < end:
                 time.sleep(CHUNK_DELAY)
 
     def close(self) -> None:
