@@ -19,6 +19,9 @@ class Settings:
 
     rpc_endpoints: dict[str, str] = field(default_factory=dict)
     smart_wallet_signal_threshold: int = 3
+    telegram_bot_token: str = ""
+    telegram_chat_id: str = ""
+    watch_poll_seconds: int = 30
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -29,7 +32,13 @@ class Settings:
                 rpc[key.removeprefix("RPC_").lower()] = value.strip()
 
         threshold = int(os.environ.get("SMART_WALLET_SIGNAL_THRESHOLD", "3"))
-        return cls(rpc_endpoints=rpc, smart_wallet_signal_threshold=threshold)
+        return cls(
+            rpc_endpoints=rpc,
+            smart_wallet_signal_threshold=threshold,
+            telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
+            telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
+            watch_poll_seconds=int(os.environ.get("WATCH_POLL_SECONDS", "30")),
+        )
 
 
 settings = Settings.from_env()
