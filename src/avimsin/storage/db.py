@@ -15,7 +15,11 @@ CREATE TABLE IF NOT EXISTS coins (
 );
 CREATE TABLE IF NOT EXISTS wallets (
     address TEXT PRIMARY KEY,
-    first_seen_block INTEGER NOT NULL
+    first_seen_block INTEGER NOT NULL,
+    is_contract INTEGER,
+    verdict TEXT,
+    verdict_rule TEXT,
+    verdict_reason TEXT
 );
 CREATE TABLE IF NOT EXISTS purchases (
     coin TEXT NOT NULL,
@@ -27,12 +31,28 @@ CREATE TABLE IF NOT EXISTS purchases (
 CREATE INDEX IF NOT EXISTS idx_purchases_coin_block ON purchases (coin, block);
 """
 
+# Faz 2'den önce oluşturulan veritabanlarına verdict kolonlarını ekler.
+MIGRATION = """
+ALTER TABLE wallets ADD COLUMN is_contract INTEGER;
+ALTER TABLE wallets ADD COLUMN verdict TEXT;
+ALTER TABLE wallets ADD COLUMN verdict_rule TEXT;
+ALTER TABLE wallets ADD COLUMN verdict_reason TEXT;
+"""
+
+VERDICT_OK = "ok"
+VERDICT_BOT = "bot"
+VERDICT_DUMP = "dump"
+
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    """Veritabanını açar (gerekirse oluşturur), şemayı uygular."""
+    """Veritabanını açar (gerekirse oluşturur), şemayı ve migration'ı uygular."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(path)
     conn.executescript(SCHEMA)
+    columns = {row[1] for row in conn.execute("PRAGMA table_info(wallets)")}
+    if "verdict" not in columns:
+        conn.executescript(MIGRATION)
+    conn.commit()
     return conn
 
 
@@ -51,4 +71,12 @@ def save_purchase(conn: sqlite3.Connection, coin: str, wallet: str, block: int, 
     conn.execute(
         "INSERT OR IGNORE INTO wallets (address, first_seen_block) VALUES (?, ?)",
         (wallet.lower(), block),
+    )
+
+
+def save_verdict(conn: sqlite3.Connection, wallet: str, verdict: str, rule: str, reason: str) -> None:
+    """Filtre sonucunu cüzdan kaydına işler."""
+    conn.execute(
+        "UPDATE wallets SET verdict = ?, verdict_rule = ?, verdict_reason = ? WHERE address = ?",
+        (verdict, rule, reason, wallet.lower()),
     )
