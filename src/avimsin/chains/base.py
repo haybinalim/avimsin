@@ -7,6 +7,7 @@ sadece bir adaptör dosyası gerektirir (bkz. robinhood.py).
 from __future__ import annotations
 
 from collections.abc import Iterator
+import time
 from typing import Any
 
 import httpx
@@ -16,6 +17,15 @@ TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523
 
 # Public RPC'lerin çoğu tek eth_getLogs çağrısında bu kadar bloktan fazlasına izin vermez.
 LOG_CHUNK = 1024
+
+# Public RPC'ler rate limitliyor (429); ucu boşaltmadan üst üste istek atmamak için
+# chunk'lar arasında beklenir.
+CHUNK_DELAY = 0.1
+
+# Rate limit / geçici hata yanıtlarında üst üste deneme sayısı; üst sınır 30 sn bekleme.
+MAX_RETRIES = 8
+BASE_WAIT = 0.5
+RETRYABLE_STATUS = {429, 502, 503, 504}
 
 
 class EvmClient:
@@ -27,15 +37,30 @@ class EvmClient:
         self._next_id = 0
 
     def call(self, method: str, params: list[Any]) -> Any:
-        """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır."""
+        """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
+
+        429/502/503/504 yanıtlarında ``Retry-After`` başlığına uyar, yoksa
+        üstel geri çekilmeyle yeniden dener.
+        """
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        response = self._http.post(self.url, json=payload)
-        response.raise_for_status()
-        data = response.json()
-        if "error" in data:
-            raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
-        return data["result"]
+        wait = BASE_WAIT
+        for _ in range(MAX_RETRIES):
+            response = self._http.post(self.url, json=payload)
+            if response.status_code in RETRYABLE_STATUS:
+                retry_after = response.headers.get("retry-after", "")
+                try:
+                    time.sleep(float(retry_after))
+                except ValueError:
+                    time.sleep(wait)
+                    wait = min(wait * 2, 30.0)
+                continue
+            response.raise_for_status()
+            data = response.json()
+            if "error" in data:
+                raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
+            return data["result"]
+        raise RuntimeError(f"{method}: {MAX_RETRIES} denemeden sonra RPC yanıt vermedi")
 
     def chain_id(self) -> int:
         return int(self.call("eth_chainId", []), 16)
@@ -65,6 +90,8 @@ class EvmClient:
             end = min(start + LOG_CHUNK - 1, to_block)
             yield from self.get_logs(start, end, topics, address)
             start = end + 1
+            if start <= to_block:
+                time.sleep(CHUNK_DELAY)
 
     def close(self) -> None:
         self._http.close()
