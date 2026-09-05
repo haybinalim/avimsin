@@ -27,6 +27,10 @@ MAX_RETRIES = 8
 BASE_WAIT = 0.5
 RETRYABLE_STATUS = {429, 502, 503, 504}
 
+# RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar ("log query timed out"
+# gibi): HTTP 200 + JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer.
+RETRYABLE_MESSAGES = ("timed out", "rate limit", "too many requests")
+
 
 class EvmClient:
     """Tek bir RPC ucuna konuşan minimal JSON-RPC istemcisi."""
@@ -40,7 +44,8 @@ class EvmClient:
         """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
 
         429/502/503/504 yanıtlarında ``Retry-After`` başlığına uyar, yoksa
-        üstel geri çekilmeyle yeniden dener.
+        üstel geri çekilmeyle yeniden dener. "log query timed out" gibi
+        sunucu tarafı geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular.
         """
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
@@ -58,6 +63,11 @@ class EvmClient:
             response.raise_for_status()
             data = response.json()
             if "error" in data:
+                message = str(data["error"].get("message", "")).lower()
+                if any(text in message for text in RETRYABLE_MESSAGES):
+                    time.sleep(wait)
+                    wait = min(wait * 2, 30.0)
+                    continue
                 raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
             return data["result"]
         raise RuntimeError(f"{method}: {MAX_RETRIES} denemeden sonra RPC yanıt vermedi")
