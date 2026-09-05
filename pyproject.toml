@@ -13,6 +13,7 @@ dependencies = [
 
 [project.scripts]
 avimsin-rpc = "avimsin.rpc_check:main"
+avimsin-scan = "avimsin.scan:main"
 
 [build-system]
 requires = ["hatchling"]

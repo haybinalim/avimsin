@@ -24,8 +24,8 @@ belirleyeceğiniz eşik, ör. 3 veya 5) bir coin aldığında **Telegram bildiri
 
 | Faz | İçerik | Durum |
 |-----|--------|-------|
-| 0 | Repo kurulumu, Python ortamı, mimari iskelet | 🚧 devam |
-| 1 | Veri katmanı: erken alıcılar + transfer/swap geçmişi (Robinhood Chain, EVM RPC) | ⏳ |
+| 0 | Repo kurulumu, Python ortamı, mimari iskelet | ✅ |
+| 1 | Veri katmanı: erken alıcılar + transfer/swap geçmişi (Robinhood Chain, EVM RPC) | ✅ (erken alıcılar; swap geçmişi Faz 2'de) |
 | 2 | Filtre motoru: bot tespiti, kaçak satış kuralları (büyüyebilir kural seti) | ⏳ |
 | 3 | Skorlama & sıralama: kazanma oranı, P&L, işlem sıklığı | ⏳ |
 | 4 | Streamlit paneli: smart wallet listesini tarayıcıda görüntüleme | ⏳ |
@@ -55,8 +55,8 @@ Kod ağ-bağımsız yazılır; EVM ağları ve Solana aynı arayüzü kullanır.
 ```bash
 cd ~/Projects/avimsin
 uv sync                # Python 3.12 sanal ortamını kurar, bağımlılıkları yükler
-cp .env.example .env   # kendi ayarlarınızı girin (.env asla commit'lenmez)
 uv run avimsin-rpc     # RPC uçlarını hız/doğruluk açısından yarıştırır
+uv run avimsin-scan <token> --from-block <blok>   # erken alıcıları topla, SQLite'a yaz
 ```
 
 ## RPC Stratejisi
