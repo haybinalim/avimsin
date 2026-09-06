@@ -16,8 +16,11 @@ import httpx
 # ERC-20 Transfer(address,address,uint256) olay imzası
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 
-# Public RPC'lerin çoğu tek eth_getLogs çağrısında bu kadar bloktan fazlasına izin vermez.
-LOG_CHUNK = 1024
+# Public RPC'ler geniş aralıklarda "log query timed out" döndürüyor: ölçümde
+# 1024 blok timeout'a düşerken 256 blok ~0.6 sn'de döndü (ROBINHOOD token,
+# Robinhood public RPC). iter_logs yine de timeout'ta yarıya bölerek
+# güvenceye alır.
+LOG_CHUNK = 256
 
 # Public RPC'ler rate limitliyor (429); ucu boşaltmadan üst üste istek atmamak için
 # chunk'lar arasında beklenir.
@@ -27,6 +30,10 @@ CHUNK_DELAY = 0.1
 MAX_RETRIES = 8
 BASE_WAIT = 0.5
 RETRYABLE_STATUS = {429, 502, 503, 504}
+
+# İstemci tarafı zaman aşımında (sunucu ağır sorguya 30 sn'de yanıt vermiyor)
+# hızlıca vazgeçilir: bekleme değil aralığı küçültmek ilaçtır, iter_logs bölme yapar.
+TRANSPORT_RETRIES = 2
 
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
@@ -48,13 +55,25 @@ class EvmClient:
 
         429/502/503/504 yanıtlarında ``Retry-After`` başlığına uyar, yoksa
         üstel geri çekilmeyle yeniden dener. "rate limit" gibi sunucu tarafı
-        geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular.
+        geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular. İstemci
+        tarafı zaman aşımı (httpx.TransportError) birkaç denemeden sonra
+        "timed out" içeren RuntimeError'a çevrilir: çağıran (iter_logs)
+        aralığı küçülterek yeniden dener.
         """
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
         wait = BASE_WAIT
+        transport_misses = 0
         for _ in range(MAX_RETRIES):
-            response = self._http.post(self.url, json=payload)
+            try:
+                response = self._http.post(self.url, json=payload)
+            except httpx.TransportError:
+                transport_misses += 1
+                if transport_misses > TRANSPORT_RETRIES:
+                    raise RuntimeError(f"{method}: RPC zaman aşımına uğradı (timed out)") from None
+                time.sleep(wait)
+                wait = min(wait * 2, 30.0)
+                continue
             if response.status_code in RETRYABLE_STATUS:
                 retry_after = response.headers.get("retry-after", "")
                 try:
