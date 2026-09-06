@@ -51,10 +51,16 @@ CHUNK_EXHAUSTED = "chunk rate limiti tükenmiş"
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
 # out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
-# iter_logs aralığı yarıya bölerek çözer. "connection refused/reset" ve
-# "i/o timeout": RPC proxy'sinin arka düğümleri ara sıra düşüyor ya da
-# resetliyor, yük dengeleyici başka düğüme çeviriyor.
-RETRYABLE_MESSAGES = ("rate limit", "too many requests", "connection refused", "connection reset", "i/o timeout")
+# "i/o timeout" ve iç proxy'nin "Post .../rpc: EOF"'u da aynı aile: arka düğüm
+# bağlantıyı sessizce kapattı, yük dengeleyici başka düğüme çevirir.
+RETRYABLE_MESSAGES = (
+    "rate limit",
+    "too many requests",
+    "connection refused",
+    "connection reset",
+    "i/o timeout",
+    ": eof",
+)
 
 
 class EvmClient:
