@@ -78,7 +78,7 @@ def main() -> None:
         st.info("Filtreden geçen (verdict=ok) cüzdan için skor verisi yok.")
     else:
         show = scored[["address", "score", "winrate", "net_pnl", "trades", "frequency"]].copy()
-        show["net_pnl"] = (show["net_pnl"] / 10**18).map("{:+.4f}".format)
+        show["net_pnl"] = show["net_pnl"].map("{:+.2f}".format)
         show["winrate"] = show["winrate"].map("{:.0%}".format)
         show["frequency"] = show["frequency"].map("{:.6f}".format)
         show.columns = ["Cüzdan", "Skor", "Winrate", "Net P&L", "Satış", "Frekans"]

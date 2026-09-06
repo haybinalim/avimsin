@@ -90,6 +90,9 @@ def save_verdict(conn: sqlite3.Connection, wallet: str, verdict: str, rule: str,
     )
 
 
+TOKEN_UNIT = 10**18  # ERC-20 standart ondalığı; P&L ham birimden buna çevrilir
+
+
 def save_score(
     conn: sqlite3.Connection,
     wallet: str,
@@ -99,9 +102,15 @@ def save_score(
     frequency: float,
     score: float,
 ) -> None:
-    """Skor tablosuna yazar veya günceller."""
+    """Skor tablosuna yazar veya günceller.
+
+    ``net_pnl`` ham token biriminden (10^18) tam token birimine çevrilerek
+    saklanır: milyar-arzlı token'ların tek transferi 10^27 ham birim taşıyabilir,
+    SQLite INTEGER sınırı 9.2*10^18'dir. Sıralama ölçeği korunur.
+    """
+    pnl_in_tokens = net_pnl // TOKEN_UNIT
     conn.execute(
         "INSERT OR REPLACE INTO scores (wallet, winrate, net_pnl, trades, frequency, score)"
         " VALUES (?, ?, ?, ?, ?, ?)",
-        (wallet.lower(), winrate, net_pnl, trades, frequency, score),
+        (wallet.lower(), winrate, pnl_in_tokens, trades, frequency, score),
     )
