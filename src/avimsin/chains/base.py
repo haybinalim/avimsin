@@ -38,8 +38,9 @@ TRANSPORT_RETRIES = 2
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
 # out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
-# iter_logs aralığı yarıya bölerek çözer.
-RETRYABLE_MESSAGES = ("rate limit", "too many requests")
+# iter_logs aralığı yarıya bölerek çözer. "connection refused": RPC proxy'sinin
+# arka düğümü ara sıra düşüyor, yük dengeleyici başka düğüme çeviriyor.
+RETRYABLE_MESSAGES = ("rate limit", "too many requests", "connection refused")
 
 
 class EvmClient:
