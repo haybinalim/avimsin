@@ -26,9 +26,11 @@ LOG_CHUNK = 256
 # chunk'lar arasında beklenir.
 CHUNK_DELAY = 0.1
 
-# Rate limit / geçici hata yanıtlarında üst üste deneme sayısı; üst sınır 30 sn bekleme.
-MAX_RETRIES = 8
+# Rate limit / geçici hata yanıtlarında üst üste deneme sayısı; üst sınır 60 sn bekleme.
+# Public RPC'nin arka düğümleri dakikalarca düşebiliyor, pencere bunu kapsamalı.
+MAX_RETRIES = 10
 BASE_WAIT = 0.5
+MAX_WAIT = 60.0
 RETRYABLE_STATUS = {429, 502, 503, 504}
 
 # İstemci tarafı zaman aşımında (sunucu ağır sorguya 30 sn'de yanıt vermiyor)
@@ -38,9 +40,10 @@ TRANSPORT_RETRIES = 2
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
 # out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
-# iter_logs aralığı yarıya bölerek çözer. "connection refused": RPC proxy'sinin
-# arka düğümü ara sıra düşüyor, yük dengeleyici başka düğüme çeviriyor.
-RETRYABLE_MESSAGES = ("rate limit", "too many requests", "connection refused")
+# iter_logs aralığı yarıya bölerek çözer. "connection refused/reset" ve
+# "i/o timeout": RPC proxy'sinin arka düğümleri ara sıra düşüyor ya da
+# resetliyor, yük dengeleyici başka düğüme çeviriyor.
+RETRYABLE_MESSAGES = ("rate limit", "too many requests", "connection refused", "connection reset", "i/o timeout")
 
 
 class EvmClient:
@@ -73,7 +76,7 @@ class EvmClient:
                 if transport_misses > TRANSPORT_RETRIES:
                     raise RuntimeError(f"{method}: RPC zaman aşımına uğradı (timed out)") from None
                 time.sleep(wait)
-                wait = min(wait * 2, 30.0)
+                wait = min(wait * 2, MAX_WAIT)
                 continue
             if response.status_code in RETRYABLE_STATUS:
                 retry_after = response.headers.get("retry-after", "")
@@ -81,7 +84,7 @@ class EvmClient:
                     time.sleep(float(retry_after))
                 except ValueError:
                     time.sleep(wait)
-                    wait = min(wait * 2, 30.0)
+                    wait = min(wait * 2, MAX_WAIT)
                 continue
             response.raise_for_status()
             data = response.json()
@@ -89,7 +92,7 @@ class EvmClient:
                 message = str(data["error"].get("message", "")).lower()
                 if any(text in message for text in RETRYABLE_MESSAGES):
                     time.sleep(wait)
-                    wait = min(wait * 2, 30.0)
+                    wait = min(wait * 2, MAX_WAIT)
                     continue
                 raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
             return data["result"]
