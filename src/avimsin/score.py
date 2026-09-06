@@ -75,7 +75,7 @@ def main() -> None:
         print(f"{'SIRA':<6}{'CUZDAN':<44}{'SCORE':<8}{'WINRATE':<10}{'P&L':>18}{'TRADES':>8}")
         print("-" * 94)
         for i, s in enumerate(ranked, start=1):
-            pnl = f"{s.net_pnl / 10**18:+.4f}"
+            pnl = f"{s.net_pnl:+.2f}"
             print(f"{i:<6}{s.wallet:<44}{s.score:<8}{s.winrate:<10}{pnl:>18}{s.trades:>8}")
         print(f"\n{len(ranked)} cüzdan skorlandı, {args.db} içine yazıldı.")
     finally:
