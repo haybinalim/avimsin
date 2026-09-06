@@ -44,6 +44,10 @@ TRANSPORT_RETRIES = 2
 CHUNK_RETRIES = 5
 CHUNK_RETRY_WAIT = 5.0
 
+# call() tükenmeyle bittiğinde mesaja eklenen işaret: iter_logs bunu görüp
+# chunk'ı bekleyip yeniden dener, timed out'tan farklı olarak bölme YAPMAZ.
+CHUNK_EXHAUSTED = "chunk rate limiti tükenmiş"
+
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
 # out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
