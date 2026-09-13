@@ -1,0 +1,163 @@
+"""Adaptör sözleşmesi testleri — EVM ve Solana aynı ChainClient yüzeyini verir."""
+
+from __future__ import annotations
+
+from avimsin.chains.base import EvmAdapter, EvmClient
+from avimsin.chains.solana import SYSTEM_PROGRAM, SolanaAdapter, SolanaClient
+from avimsin.collectors.early_buyers import earliest_buyers
+from avimsin.collectors.transfers import ZERO_ADDRESS
+from tests.fake_evm import FakeEvmChain
+from tests.fake_solana import FakeSolanaChain, make_balance_tx
+
+TOKEN = "0x" + "aa" * 20
+ALICE = "0x" + "11" * 20
+BOB = "0x" + "22" * 20
+CAROL = "0x" + "33" * 20
+CONTRACT = "0x" + "44" * 20
+
+MINT = "Mint111111111111111111111111111111111111111"
+S_ALICE = "Alice1111111111111111111111111111111111111"
+S_BOB = "Bob1111111111111111111111111111111111111111"
+S_CAROL = "Carol11111111111111111111111111111111111111"
+
+
+def evm_adapter(**kw) -> EvmAdapter:
+    chain = FakeEvmChain(
+        transfers=[
+            (ZERO_ADDRESS, ALICE, 100, 1000),  # mint: erken alıcı değil
+            (ALICE, BOB, 101, 400),
+            (BOB, CAROL, 102, 100),
+        ],
+        token=TOKEN,
+        latest_block=200,
+        contracts={CONTRACT},
+    )
+    return EvmAdapter(EvmClient("http://sahte", transport=chain.transport()))
+
+
+
+
+def test_evm_adapter_transfers_chronological_with_token_field() -> None:
+    adapter = evm_adapter()
+    events = adapter.token_transfers(TOKEN, 100, 200)
+    # Adaptör ham olayları döndürür; mint eleme earliest_buyers'ın işidir.
+    assert [(e.frm, e.to) for e in events] == [
+        (ZERO_ADDRESS, ALICE),
+        (ALICE, BOB),
+        (BOB, CAROL),
+    ]
+    assert all(e.token == TOKEN for e in events)
+    assert [e.block for e in events] == [100, 101, 102]
+
+
+
+def test_evm_adapter_contract_and_chain_surface() -> None:
+    adapter = evm_adapter()
+    assert adapter.block_number() == 200
+    assert adapter.decimals(TOKEN) == 18
+    assert adapter.is_contract(CONTRACT) is True
+    assert adapter.is_contract(BOB) is False
+
+
+def test_earliest_buyers_works_through_protocol() -> None:
+    adapter = evm_adapter()
+    buyers = earliest_buyers(adapter, TOKEN, 100, 10)
+    assert [b.wallet for b in buyers] == [BOB, CAROL]
+    assert buyers[0].block == 101
+
+
+def sol_adapter(
+    txs: dict[str, dict],
+    sigs: list[dict],
+    owners: dict | None = None,
+    decimals: int = 9,
+) -> SolanaAdapter:
+    chain = FakeSolanaChain(
+        signatures=sigs, transactions=txs, owners=owners, decimals=decimals
+    )
+    return SolanaAdapter(SolanaClient("http://sahte", transport=chain.transport()))
+
+
+def sig(name: str, slot: int, err: dict | None = None) -> dict:
+    return {"signature": name, "slot": slot, "err": err}
+
+
+def test_solana_single_transfer() -> None:
+    txs = {
+        "sig1": make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)]),
+    }
+    adapter = sol_adapter(txs, [sig("sig1", 10)])
+    events = adapter.token_transfers(MINT, 1, 100)
+    assert len(events) == 1
+    e = events[0]
+    assert (e.frm, e.to, e.block, e.tx, e.value, e.token) == (
+        S_ALICE, S_BOB, 10, "sig1", 100, MINT,
+    )
+
+
+def test_solana_mint_and_burn_marked_zero() -> None:
+    txs = {
+        "mint1": make_balance_tx(MINT, [], [(S_ALICE, 500)]),
+        "burn1": make_balance_tx(MINT, [(S_ALICE, 200)], []),
+    }
+    adapter = sol_adapter(txs, [sig("burn1", 12), sig("mint1", 11)])
+    events = adapter.token_transfers(MINT, 1, 100)
+    by_tx = {e.tx: e for e in events}
+    assert by_tx["mint1"].frm == ZERO_ADDRESS
+    assert by_tx["mint1"].to == S_ALICE
+    assert by_tx["burn1"].frm == S_ALICE
+    assert by_tx["burn1"].to == ZERO_ADDRESS
+
+
+def test_solana_failed_tx_skipped_and_slot_filtered() -> None:
+    txs = {
+        "bad": make_balance_tx(MINT, [(S_ALICE, 50)], [(S_BOB, 50)]),
+        "good": make_balance_tx(MINT, [(S_ALICE, 70)], [(S_BOB, 70)]),
+    }
+    adapter = sol_adapter(
+        txs, [sig("good", 20), sig("bad", 21, err={"InstructionError": [0, "Custom"]})]
+    )
+    events = adapter.token_transfers(MINT, 1, 100)
+    assert [e.tx for e in events] == ["good"]
+    # aralık dışı slot elenir
+    assert adapter.token_transfers(MINT, 30, 100) == []
+
+
+def test_solana_greedy_match_preserves_wallet_nets() -> None:
+    # A:-100, B:-50, C:+150 — toplamlar korunmalı, karşıt kimliği tahminidir
+    txs = {
+        "multi": make_balance_tx(
+            MINT, [(S_ALICE, 100), (S_BOB, 50)], [(S_CAROL, 150)]
+        ),
+    }
+    adapter = sol_adapter(txs, [sig("multi", 5)])
+    events = adapter.token_transfers(MINT, 1, 100)
+    net: dict[str, int] = {}
+    for e in events:
+        if e.frm != ZERO_ADDRESS:
+            net[e.frm] = net.get(e.frm, 0) - e.value
+        if e.to != ZERO_ADDRESS:
+            net[e.to] = net.get(e.to, 0) + e.value
+    assert net == {S_ALICE: -100, S_BOB: -50, S_CAROL: 150}
+    assert sum(e.value for e in events) == 150
+
+
+def test_solana_owner_fallback_to_account_keys() -> None:
+    txs = {
+        "sig1": make_balance_tx(MINT, [(S_ALICE, 40)], [(S_BOB, 40)], with_owner=False),
+    }
+    adapter = sol_adapter(txs, [sig("sig1", 7)])
+    events = adapter.token_transfers(MINT, 1, 100)
+    assert [(e.frm, e.to) for e in events] == [(S_ALICE, S_BOB)]
+
+
+def test_solana_is_contract_decimals_slot() -> None:
+    adapter = sol_adapter(
+        {}, [], owners={S_ALICE: SYSTEM_PROGRAM, S_BOB: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"},
+        decimals=6,
+    )
+    assert adapter.is_contract(S_ALICE) is False
+    assert adapter.is_contract(S_BOB) is True
+    assert adapter.is_contract("olmayan") is False
+    assert adapter.decimals(MINT) == 6
+    assert adapter.block_number() == 1_000

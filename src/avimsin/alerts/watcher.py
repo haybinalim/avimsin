@@ -9,11 +9,10 @@ from __future__ import annotations
 
 import sqlite3
 import time
-from collections import Counter
 from dataclasses import dataclass
 
-from ..chains.base import TRANSFER_TOPIC, EvmClient
-from ..collectors.transfers import TransferEvent, token_transfers
+from ..chains.protocol import ChainClient
+from ..collectors.transfers import TransferEvent
 from ..config import settings
 from .telegram import TelegramClient
 
@@ -35,6 +34,8 @@ def detect_signals(
 ) -> list[Signal]:
     """Yeni alımlar arasında eşik aşan coin'leri bulur.
 
+    Coin eşleşmesi olayın ``token`` alanıyla yapılır (EVM kontratı / SPL mint):
+    transferin `frm`'i gönderen cüzlandır, token'ın kendisi değil.
     smart_wallets None ise purchases tablosundaki tüm cüzdanlar sayılır
     (verdict filtresi CLI tarafında uygulanır).
     """
@@ -46,11 +47,11 @@ def detect_signals(
     by_coin: dict[str, list[TransferEvent]] = {}
     for e in relevant:
         coin_row = conn.execute(
-            "SELECT address FROM coins WHERE address = ?", (e.frm,)
+            "SELECT address FROM coins WHERE address = ?", (e.token,)
         ).fetchone()
         if coin_row is None:
             continue  # izlenen coin değil
-        by_coin.setdefault(e.frm, []).append(e)
+        by_coin.setdefault(e.token, []).append(e)
 
     signals = []
     for coin, coin_events in by_coin.items():
@@ -79,9 +80,9 @@ def format_signal(signal: Signal, threshold: int) -> str:
 
 
 def watch_loop(
-    client: EvmClient,
+    client: ChainClient,
     conn: sqlite3.Connection,
-    token_rpc: EvmClient,
+    token_rpc: ChainClient | None = None,
     threshold: int | None = None,
     poll_seconds: int | None = None,
     telegram: TelegramClient | None = None,
@@ -111,10 +112,11 @@ def watch_loop(
             events: list[TransferEvent] = []
             for coin in coins:
                 events.extend(
-                    token_transfers(client, coin, last_block + 1, latest)
+                    client.token_transfers(coin, last_block + 1, latest)
                 )
-            # Sadece izlenen coin'e yapılan alımlar sinyal adayı
-            events = [e for e in events if e.frm in set(coins) and e.to in smart_wallets]
+            # Sadece smart wallet alımları sinyal adayı; coin eşleşmesini
+            # detect_signals olayın token alanıyla yapar.
+            events = [e for e in events if e.to in smart_wallets]
 
             for signal in detect_signals(conn, events, threshold):
                 text = format_signal(signal, threshold)

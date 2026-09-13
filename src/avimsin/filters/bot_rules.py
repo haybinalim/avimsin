@@ -15,7 +15,7 @@ class ContractRule:
             return Verdict(
                 self.name,
                 "bot",
-                f"{history.wallet} kontrat (eth_getCode boş değil)",
+                f"{history.wallet} kontrat/program (zincir kontrat kontrolü pozitif)",
             )
         return None
 

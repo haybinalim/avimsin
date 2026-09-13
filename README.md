@@ -60,7 +60,12 @@ uv run avimsin-scan <token> --from-block <blok>   # erken alıcıları topla, SQ
 uv run avimsin-filter <token>   # alıcıları bot/kaçak satış kurallarından geçir
 uv run avimsin-score <token>    # temiz cüzdanları winrate/P&L/frekans ile sırala
 uv run avimsin-watch          # sinyal izleyici (Telegram'a bildirir)
+uv run pytest                 # test ağı (sahte EVM/Solana zincirleri, ağ yok)
 ```
+
+`scan/filter/score/watch` komutları `--chain robinhood|solana` bayrağıyla zincir
+seçer (varsayılan `robinhood`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
+verilmezse public devnet ucu kullanılır.
 
 ## RPC Stratejisi
 

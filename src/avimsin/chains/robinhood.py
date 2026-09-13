@@ -6,7 +6,7 @@ Kaynak: https://docs.robinhood.com/chain/connecting/
 from __future__ import annotations
 
 from ..config import settings
-from .base import EvmClient
+from .base import EvmAdapter, EvmClient
 
 CHAIN_ID = 4663
 
@@ -22,8 +22,8 @@ def resolve_rpc() -> str:
     return PUBLIC_RPC
 
 
-def connect() -> EvmClient:
-    """Robinhood Chain istemcisi açar ve zincir kimliğini doğrular."""
+def connect() -> EvmAdapter:
+    """Robinhood Chain istemcisi açar, zincir kimliğini doğrular, adaptör döndürür."""
     client = EvmClient(resolve_rpc())
     actual = client.chain_id()
     if actual != CHAIN_ID:
@@ -31,4 +31,4 @@ def connect() -> EvmClient:
         raise RuntimeError(
             f"Zincir kimliği {CHAIN_ID} beklenirken {actual} bulundu ({resolve_rpc()})"
         )
-    return client
+    return EvmAdapter(client)

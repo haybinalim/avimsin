@@ -1,6 +1,7 @@
 """SQLite kalıcılık — coin'ler, cüzdanlar ve alımlar.
 
-Tüm adresler canonical (küçük harf) saklanır.
+EVM adresleri canonical (küçük harf) saklanır; base58 (Solana) adresleri
+büyük/küçük harf duyarlı haliyle saklanır — bkz. normalize_address.
 """
 
 from __future__ import annotations
@@ -52,6 +53,16 @@ VERDICT_BOT = "bot"
 VERDICT_DUMP = "dump"
 
 
+def normalize_address(address: str) -> str:
+    """Adresi saklama biçimine çevirir.
+
+    EVM adresleri (0x önekli) büyük/küçük harf duyarsız olduğu için küçültülür;
+    base58 (Solana) adresleri 0x taşıyamaz ve harf duyarlıdır — olduğu gibi
+    saklanır. Zincir bilgisine gerek bırakmaz: önek yeterli ayırt edicidir.
+    """
+    return address.lower() if address.startswith("0x") else address
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Veritabanını açar (gerekirse oluşturur), şemayı ve migration'ı uygular."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -67,18 +78,18 @@ def connect(path: str | Path) -> sqlite3.Connection:
 def save_coin(conn: sqlite3.Connection, address: str, first_block: int) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO coins (address, first_block) VALUES (?, ?)",
-        (address.lower(), first_block),
+        (normalize_address(address), first_block),
     )
 
 
 def save_purchase(conn: sqlite3.Connection, coin: str, wallet: str, block: int, tx: str) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO purchases (coin, wallet, block, tx) VALUES (?, ?, ?, ?)",
-        (coin.lower(), wallet.lower(), block, tx),
+        (normalize_address(coin), normalize_address(wallet), block, tx),
     )
     conn.execute(
         "INSERT OR IGNORE INTO wallets (address, first_seen_block) VALUES (?, ?)",
-        (wallet.lower(), block),
+        (normalize_address(wallet), block),
     )
 
 
@@ -86,7 +97,7 @@ def save_verdict(conn: sqlite3.Connection, wallet: str, verdict: str, rule: str,
     """Filtre sonucunu cüzdan kaydına işler."""
     conn.execute(
         "UPDATE wallets SET verdict = ?, verdict_rule = ?, verdict_reason = ? WHERE address = ?",
-        (verdict, rule, reason, wallet.lower()),
+        (verdict, rule, reason, normalize_address(wallet)),
     )
 
 
@@ -101,16 +112,18 @@ def save_score(
     trades: int,
     frequency: float,
     score: float,
+    token_unit: int = TOKEN_UNIT,
 ) -> None:
     """Skor tablosuna yazar veya günceller.
 
-    ``net_pnl`` ham token biriminden (10^18) tam token birimine çevrilerek
-    saklanır: milyar-arzlı token'ların tek transferi 10^27 ham birim taşıyabilir,
-    SQLite INTEGER sınırı 9.2*10^18'dir. Sıralama ölçeği korunur.
+    ``net_pnl`` ham token biriminden tam token birimine ``token_unit`` ile
+    çevrilerek saklanır: milyar-arzlı token'ların tek transferi 10^27 ham birim
+    taşıyabilir, SQLite INTEGER sınırı 9.2*10^18'dir. Sıralama ölçeği korunur.
+    ``token_unit`` = 10**decimals; EVM'de 18, Solana'da mint'ten okunur.
     """
-    pnl_in_tokens = net_pnl // TOKEN_UNIT
+    pnl_in_tokens = net_pnl // token_unit
     conn.execute(
         "INSERT OR REPLACE INTO scores (wallet, winrate, net_pnl, trades, frequency, score)"
         " VALUES (?, ?, ?, ?, ?, ?)",
-        (wallet.lower(), winrate, pnl_in_tokens, trades, frequency, score),
+        (normalize_address(wallet), winrate, pnl_in_tokens, trades, frequency, score),
     )

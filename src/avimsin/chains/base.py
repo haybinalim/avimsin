@@ -1,7 +1,8 @@
-"""Ağ-bağımsız EVM JSON-RPC istemcisi.
+"""EVM zincir katmanı — JSON-RPC istemcisi + ERC-20 transfer okuma.
 
-Tüm zincir adaptörleri bu istemciyi kullanır; yeni ağ eklemek
-sadece bir adaptör dosyası gerektirir (bkz. robinhood.py).
+EvmClient ham RPC konuşur; EvmAdapter onu ChainClient sözleşmesine sarar.
+Yeniden deneme katmanı: 429/5xx üstel backoff, geçici JSON-RPC hataları,
+adaptif chunk bölme (bkz. PR #7-#16).
 """
 
 from __future__ import annotations
@@ -12,6 +13,8 @@ from collections import deque
 from typing import Any
 
 import httpx
+
+from ..collectors.transfers import TransferEvent
 
 # ERC-20 Transfer(address,address,uint256) olay imzası
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
@@ -51,8 +54,11 @@ CHUNK_EXHAUSTED = "chunk rate limiti tükenmiş"
 # RPC sunucusunun kendi mesajlarıyla döndürdüğü geçici hatalar: HTTP 200 +
 # JSON-RPC hatası olarak gelirler ama yeniden deneyince geçer. "query timed
 # out" burada değildir: o geçicilik değil sorgunun bu aralıkta çalışamazlığıdır,
-# "i/o timeout" ve iç proxy'nin "Post .../rpc: EOF"'u da aynı aile: arka düğüm
-# bağlantıyı sessizce kapattı, yük dengeleyici başka düğüme çevirir.
+# iter_logs aralığı yarıya bölerek çözer. "connection refused/reset" ve
+# "i/o timeout": RPC proxy'sinin arka düğümleri ara sıra düşüyor ya da
+# resetliyor, yük dengeleyici başka düğüme çeviriyor. "i/o timeout" ve iç
+# proxy'nin "Post .../rpc: EOF"'u da aynı aile: arka düğüm bağlantıyı sessizce
+# kapattı, yük dengeleyici başka düğüme çevirir.
 RETRYABLE_MESSAGES = (
     "rate limit",
     "too many requests",
@@ -66,15 +72,18 @@ RETRYABLE_MESSAGES = (
 class EvmClient:
     """Tek bir RPC ucuna konuşan minimal JSON-RPC istemcisi."""
 
-    def __init__(self, url: str, timeout: float = 30.0) -> None:
+    def __init__(
+        self, url: str, timeout: float = 30.0, transport: httpx.BaseTransport | None = None
+    ) -> None:
         self.url = url
-        self._http = httpx.Client(timeout=timeout)
+        self._http = httpx.Client(timeout=timeout, transport=transport)
         self._next_id = 0
 
     def call(self, method: str, params: list[Any]) -> Any:
         """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
 
         429/502/503/504 yanıtlarında ``Retry-After`` başlığına uyar, yoksa
+        üstel geri çekilmeyle yeniden dener. "rate limit" gibi sunucu tarafı
         geçici JSON-RPC hatalarında da aynı geri çekilmeyi uygular. İstemci
         tarafı zaman aşımı (httpx.TransportError) birkaç denemeden sonra
         "timed out" içeren RuntimeError'a çevrilir: çağıran (iter_logs)
@@ -119,6 +128,9 @@ class EvmClient:
 
     def block_number(self) -> int:
         return int(self.call("eth_blockNumber", []), 16)
+
+    def get_code(self, wallet: str) -> str:
+        return self.call("eth_getCode", [wallet, "latest"])
 
     def get_logs(
         self, from_block: int, to_block: int, topics: list[str], address: str | None = None
@@ -176,6 +188,54 @@ class EvmClient:
         self._http.close()
 
     def __enter__(self) -> "EvmClient":
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self.close()
+
+
+class EvmAdapter:
+    """EvmClient'ı ChainClient sözleşmesine saran adaptör."""
+
+    def __init__(self, client: EvmClient) -> None:
+        self._client = client
+
+    def block_number(self) -> int:
+        return self._client.block_number()
+
+    def token_transfers(self, token: str, from_slot: int, to_slot: int) -> list[TransferEvent]:
+        """ERC-20 Transfer olaylarını kronolojik döndürür."""
+        token = token.lower()
+        events: list[TransferEvent] = []
+        for log in self._client.iter_logs(from_slot, to_slot, [TRANSFER_TOPIC], address=token):
+            topics = log.get("topics", [])
+            if len(topics) < 3:
+                continue
+            events.append(
+                TransferEvent(
+                    frm="0x" + topics[1][-40:],
+                    to="0x" + topics[2][-40:],
+                    block=int(log["blockNumber"], 16),
+                    tx=log["transactionHash"],
+                    value=int(log.get("data", "0x0") or "0x0", 16),
+                    token=token,
+                )
+            )
+        events.sort(key=lambda e: (e.block, e.tx))
+        return events
+
+    def is_contract(self, wallet: str) -> bool:
+        return self._client.get_code(wallet) != "0x"
+
+    def decimals(self, token: str) -> int:
+        # ERC-20 ondalığı kontrattan okunabilir ama mevcut P&L ölçeği 18'e
+        # gömülü (TOKEN_UNIT); Robinhood Chain token'ları bu varsayımla işliyor.
+        return 18
+
+    def close(self) -> None:
+        self._client.close()
+
+    def __enter__(self) -> "EvmAdapter":
         return self
 
     def __exit__(self, *exc: object) -> None:
