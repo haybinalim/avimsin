@@ -8,7 +8,7 @@ Wants=network-online.target
 Type=simple
 # APP_DIR kurulumda gerçek yola çevrilir (install.sh yazar).
 WorkingDirectory=APP_DIR
-ExecStart=APP_DIR/.venv/bin/python -m avimsin.watch --chain CHAIN_NAME --db APP_DIR/data/avimsin.sqlite
+ExecStart=APP_DIR/.venv/bin/avimsin-watch --chain CHAIN_NAME --db APP_DIR/data/avimsin.sqlite
 # .env WorkingDirectory'den okunur (python-dotenv); ayrıca dosya olarak da verilir.
 EnvironmentFile=-APP_DIR/.env
 Restart=always
