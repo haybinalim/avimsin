@@ -1,0 +1,23 @@
+[Unit]
+Description=Avimsin smart wallet izleyici (Telegram sinyal servisi)
+Documentation=https://github.com/haybinalim/avimsin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# APP_DIR kurulumda gerçek yola çevrilir (install.sh yazar).
+WorkingDirectory=APP_DIR
+ExecStart=APP_DIR/.venv/bin/python -m avimsin.watch --chain CHAIN_NAME --db APP_DIR/data/avimsin.sqlite
+# .env WorkingDirectory'den okunur (python-dotenv); ayrıca dosya olarak da verilir.
+EnvironmentFile=-APP_DIR/.env
+Restart=always
+RestartSec=10
+# RPC 429/backoff pencereleri + saatlik taramalar: servisi öldürme, beklesin.
+TimeoutStopSec=60
+# SQLite yazma + log: dar yetki, ev dizini dışı yazma yok.
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
