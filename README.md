@@ -29,8 +29,7 @@ belirleyeceğiniz eşik, ör. 3 veya 5) bir coin aldığında **Telegram bildiri
 | 2 | Filtre motoru: bot tespiti, kaçak satış kuralları (büyüyebilir kural seti) | ✅ (fiyat-bağımsız kurallar; P&L bazlı zenginleştirme Faz 3'te) |
 | 3 | Skorlama & sıralama: kazanma oranı, P&L, işlem sıklığı | ✅ (fiyat-bağımsız; USD P&L Faz 4+ta) |
 | 4 | Streamlit paneli: smart wallet listesini tarayıcıda görüntüleme | ✅ (`uv run streamlit run dashboard/app.py`) |
-| 5 | Telegram bildirim botu: "≥ N smart wallet aynı coini aldı" eşik uyarısı | ✅ (`.env`'e TELEGRAM_BOT_TOKEN + CHAT_ID girin) |
-| 6 | Oracle Free VPS'e 7/24 dağıtım (systemd) + Solana ve diğer EVM ağları | ⏳ |
+| 6 | Oracle Free VPS'e 7/24 dağıtım (systemd) + Solana ve diğer EVM ağları | ⏳ (VPS paketi: `deploy/` — kurulum `deploy/README.md`; Solana: `--chain solana`) |
 
 ## Mimari
 
