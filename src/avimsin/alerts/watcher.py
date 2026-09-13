@@ -87,44 +87,58 @@ def watch_loop(
     poll_seconds: int | None = None,
     telegram: TelegramClient | None = None,
     once: bool = False,
+    max_slots_per_poll: int | None = None,
 ) -> int:
     """İzleme döngüsü: yeni bloklardaki alımları tarar, sinyal üretilirse bildirir.
 
     Döndürür: gönderilen bildirim sayısı (once=True tek tur çalışır).
+    ``max_slots_per_poll``: Solana gibi hızlı zincirlerde tek turda geriye
+    dönük taranacak en fazla aralık. Pencere aşılırsa tur atlanır, `last_block`
+    güncele çekilir (eski aralık bir daha denenmez — eksik veri sessizce
+    sinyal sayılmaz, log satırıyla görünür). None = sınır yok (EVM varsayılanı).
     """
     threshold = threshold if threshold is not None else settings.smart_wallet_signal_threshold
     poll_seconds = poll_seconds if poll_seconds is not None else settings.watch_poll_seconds
+    if max_slots_per_poll is None:
+        max_slots_per_poll = settings.watch_max_slots_per_poll
     sent = 0
     last_block = client.block_number()
 
     while True:
         latest = client.block_number()
         if latest > last_block:
-            # İzlenen coin'lerin alımlarını yeni bloklardan çek
-            coins = [r[0] for r in conn.execute("SELECT address FROM coins").fetchall()]
-            smart_wallets = {
-                r[0]
-                for r in conn.execute(
-                    "SELECT DISTINCT wallet FROM purchases WHERE wallet IN"
-                    " (SELECT address FROM wallets WHERE verdict = 'ok')"
-                ).fetchall()
-            }
-            events: list[TransferEvent] = []
-            for coin in coins:
-                events.extend(
-                    client.token_transfers(coin, last_block + 1, latest)
+            if max_slots_per_poll is not None and latest - last_block > max_slots_per_poll:
+                print(
+                    f"ATLANDI: {latest - last_block} aralık > {max_slots_per_poll} sınır;"
+                    f" {last_block + 1}–{latest} taranmadı, güncele geçildi."
                 )
-            # Sadece smart wallet alımları sinyal adayı; coin eşleşmesini
-            # detect_signals olayın token alanıyla yapar.
-            events = [e for e in events if e.to in smart_wallets]
+                last_block = latest
+            else:
+                # İzlenen coin'lerin alımlarını yeni bloklardan çek
+                coins = [r[0] for r in conn.execute("SELECT address FROM coins").fetchall()]
+                smart_wallets = {
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT DISTINCT wallet FROM purchases WHERE wallet IN"
+                        " (SELECT address FROM wallets WHERE verdict = 'ok')"
+                    ).fetchall()
+                }
+                events: list[TransferEvent] = []
+                for coin in coins:
+                    events.extend(
+                        client.token_transfers(coin, last_block + 1, latest)
+                    )
+                # Sadece smart wallet alımları sinyal adayı; coin eşleşmesini
+                # detect_signals olayın token alanıyla yapar.
+                events = [e for e in events if e.to in smart_wallets]
 
-            for signal in detect_signals(conn, events, threshold):
-                text = format_signal(signal, threshold)
-                if telegram is not None:
-                    telegram.send_message(text=text)
-                print(f"SİNYAL: {signal.coin} — {len(signal.wallets)} smart wallet")
-                sent += 1
-            last_block = latest
+                for signal in detect_signals(conn, events, threshold):
+                    text = format_signal(signal, threshold)
+                    if telegram is not None:
+                        telegram.send_message(text=text)
+                    print(f"SİNYAL: {signal.coin} — {len(signal.wallets)} smart wallet")
+                    sent += 1
+                last_block = latest
         if once:
             return sent
         time.sleep(poll_seconds)

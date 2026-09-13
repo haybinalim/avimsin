@@ -77,13 +77,19 @@ class SolanaClient:
         return int(self.call("getSlot", []))
 
     def get_signatures_for_address(
-        self, address: str, from_slot: int | None = None, until_slot: int | None = None
+        self,
+        address: str,
+        from_slot: int | None = None,
+        until_slot: int | None = None,
+        max_signatures: int | None = None,
     ) -> list[dict]:
         """Adrese dokunan işlemleri yeniden eskiye doğru sayfalar.
 
         ``from_slot`` verilirse daha eski slotlara inmeyi bırakır (sayfalama
         imza bazlıdır; slot filtresi istemci tarafında yapılır). Hatalı
-        işlemler de döner — çağıran `err` alanına bakar.
+        işlemler de döner — çağıran `err` alanına bakar. ``max_signatures``
+        verilirse o kadar imzadan sonra durur: kesilen aralık eksik veri
+        demektir, çağıran pencereyi daraltmalıdır.
         """
         out: list[dict] = []
         before: str | None = None
@@ -101,6 +107,8 @@ class SolanaClient:
                 if from_slot is not None and slot < from_slot:
                     return out  # yeniden eskiye gidiyoruz; aralık bitti
                 out.append(entry)
+                if max_signatures is not None and len(out) >= max_signatures:
+                    return out
             oldest = batch[-1]["slot"]
             if from_slot is not None and int(oldest) < from_slot:
                 return out
@@ -145,11 +153,22 @@ class SolanaAdapter:
     def block_number(self) -> int:
         return self._client.get_slot()
 
-    def token_transfers(self, token: str, from_slot: int, to_slot: int) -> list[TransferEvent]:
-        """Mint'in [from_slot, to_slot] aralığındaki SPL transferleri, kronolojik."""
+    def token_transfers(
+        self,
+        token: str,
+        from_slot: int,
+        to_slot: int,
+        max_signatures: int | None = None,
+    ) -> list[TransferEvent]:
+        """Mint'in [from_slot, to_slot] aralığındaki SPL transferleri, kronolojik.
+
+        ``max_signatures`` verilirse imza taraması o sayıda durur: kesilen
+        aralık eksik veri demektir, çağıran pencereyi daraltmalıdır. Varsayılan
+        None = kesme yok (scan/score tam tarama yapar).
+        """
         events: list[TransferEvent] = []
         for entry in self._client.get_signatures_for_address(
-            token, from_slot=from_slot, until_slot=to_slot
+            token, from_slot=from_slot, until_slot=to_slot, max_signatures=max_signatures
         ):
             if entry.get("err") is not None:
                 continue  # başarısız işlem bakiye değiştirmez
