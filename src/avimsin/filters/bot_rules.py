@@ -1,8 +1,14 @@
-"""Bot tespit kuralları: kontrat cüzdan, gidiş-dönüş sweeper, yüksek frekans."""
+"""Bot tespit kuralları: kontrat cüzdan, gidiş-dönüş sweeper, yüksek frekans.
+
+Pencereler zincir-duyarlıdır: süre eşiği `filters/chains.py` aralığına
+bölünerek aralık sayısına çevrilir. Argsız çağrılar EVM varsayılanlarıyla
+bit-bit aynı kalır — `filter.py` mevcut çağrıları değişmeden çalışır.
+"""
 
 from __future__ import annotations
 
 from .base import WalletHistory, Verdict
+from .chains import BLOCK_INTERVAL_SECONDS, DEFAULT_CHAIN, normalize_chain
 
 
 class ContractRule:
@@ -21,11 +27,31 @@ class ContractRule:
 
 
 class RoundTripRule:
-    """Alım ile satım arasındaki blok farkı `max_gap`'ten küçükse sweeper kabul eder."""
+    """Alım ile satım arası eşikten kısaysa sweeper kabul eder.
+
+    Eşik iki yoldan verilir: blok cinsinden `max_gap` (EVM varsayılanı 10,
+    argsız çağrı bit-bit aynı kalır) ya da süre cinsinden `max_gap_seconds`
+    + `chain` (süre zincir aralığına bölünür, yukarı yuvarlanır, en az 1).
+    İkisi birden verilirse `max_gap` kazanır.
+    """
 
     name = "round_trip"
 
-    def __init__(self, max_gap: int = 10) -> None:
+    def __init__(
+        self,
+        max_gap: int | None = 10,
+        max_gap_seconds: float | None = None,
+        chain: str = DEFAULT_CHAIN,
+    ) -> None:
+        self.chain = normalize_chain(chain)
+        if max_gap is None:
+            import math
+
+            assert max_gap_seconds is not None
+            max_gap = max(
+                1,
+                math.ceil(max_gap_seconds / BLOCK_INTERVAL_SECONDS[self.chain]),
+            )
         self.max_gap = max_gap
 
     def check(self, history: WalletHistory) -> Verdict | None:
@@ -37,7 +63,7 @@ class RoundTripRule:
             return Verdict(
                 self.name,
                 "bot",
-                f"alım (blok {first_in}) sonrası {first_out - first_in} blokta satış — sweeper deseni",
+                f"alım (aralık {first_in}) sonrası {first_out - first_in} aralıkta satış — sweeper deseni",
             )
         return None
 
