@@ -9,18 +9,18 @@ from __future__ import annotations
 
 import argparse
 
-from .chains.robinhood import connect
-from .collectors.transfers import token_transfers
+from .chains import open_chain
+from .chains.protocol import ChainClient
 from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
 from .filters.dump_rules import DumpRule
 from .storage.db import connect as db_connect
-from .storage.db import save_verdict
+from .storage.db import normalize_address, save_verdict
 
 
-def _is_contract(client, wallet: str) -> bool:
-    """Cüzdanın kontrat olup olmadığını söyler (eth_getCode)."""
-    return client.call("eth_getCode", [wallet, "latest"]) != "0x"
+def _is_contract(client: ChainClient, wallet: str) -> bool:
+    """Cüzdanın kontrat/program olup olmadığını söyler."""
+    return client.is_contract(wallet)
 
 
 def main() -> None:
@@ -28,7 +28,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Erken alıcıları filtre kurallarından geçirir (bot/kaçak satış eleme)."
     )
-    parser.add_argument("coin", help="ERC-20 token kontrat adresi")
+    parser.add_argument("coin", help="Token adresi (EVM kontrat / SPL mint)")
     parser.add_argument(
         "--from-block",
         type=int,
@@ -38,12 +38,15 @@ def main() -> None:
     parser.add_argument(
         "--to-block", type=int, default=None, help="Tarama bitişi (varsayılan: en güncel blok)"
     )
+    parser.add_argument(
+        "--chain", default="robinhood", choices=["robinhood", "solana"], help="Zincir seçimi"
+    )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()
 
     conn = db_connect(args.db)
     try:
-        coin = args.coin.lower()
+        coin = normalize_address(args.coin)
         if args.from_block is None:
             row = conn.execute(
                 "SELECT first_block FROM coins WHERE address = ?", (coin,)
@@ -63,9 +66,9 @@ def main() -> None:
         if not wallets:
             raise SystemExit(f"{coin} için kayıtlı alıcı yok; önce avimsin-scan çalıştırın.")
 
-        with connect() as client:
+        with open_chain(args.chain) as client:
             to_block = args.to_block if args.to_block is not None else client.block_number()
-            events = token_transfers(client, coin, from_block, to_block)
+            events = client.token_transfers(coin, from_block, to_block)
             histories: dict[str, WalletHistory] = {}
             for wallet in wallets:
                 relevant = [e for e in events if e.frm == wallet or e.to == wallet]

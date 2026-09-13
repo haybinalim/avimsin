@@ -1,41 +1,25 @@
-"""Token transfer geçmişi: zincirden transfer olaylarını çeker, cüzdan bazlı gruplar."""
+"""Token transfer veri tipleri — ağ-bağımsız.
+
+TransferEvent EVM (ERC-20) ve Solana (SPL) adaptörlerinin doldurduğu ortak
+şekildir: frm/to adresleri, blok/slot, tx imzası, ham token değeri.
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..chains.base import TRANSFER_TOPIC, EvmClient
-
+# Mint/burn kaynak adresi: EVM'de 0x0. Solana adaptörü mint authority
+# transferlerini de bu adresle işaretler ki filtreler ağ-farkı görmesin.
 ZERO_ADDRESS = "0x" + "0" * 40
 
 
 @dataclass(frozen=True)
 class TransferEvent:
-    """Tek bir ERC-20 Transfer olayı."""
+    """Tek bir token Transfer olayı."""
 
     frm: str
     to: str
-    block: int
-    tx: str
-    value: int = 0  # ham token birimi (18 ondalıklıysa wei gibi)
-
-
-def token_transfers(client: EvmClient, token: str, from_block: int, to_block: int) -> list[TransferEvent]:
-    """Token'ın [from_block, to_block] aralığındaki tüm Transfer olaylarını chronolojik döndürür."""
-    token = token.lower()
-    events: list[TransferEvent] = []
-    for log in client.iter_logs(from_block, to_block, [TRANSFER_TOPIC], address=token):
-        topics = log.get("topics", [])
-        if len(topics) < 3:
-            continue
-        events.append(
-            TransferEvent(
-                frm="0x" + topics[1][-40:],
-                to="0x" + topics[2][-40:],
-                block=int(log["blockNumber"], 16),
-                tx=log["transactionHash"],
-                value=int(log.get("data", "0x0") or "0x0", 16),
-            )
-        )
-    events.sort(key=lambda e: (e.block, e.tx))
-    return events
+    block: int  # EVM blok numarası / Solana slot numarası
+    tx: str  # tx hash / imza
+    value: int = 0  # ham token birimi (ondalık ölçeğiyle)
+    token: str = ""  # hangi token: EVM kontrat adresi / SPL mint adresi

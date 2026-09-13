@@ -19,6 +19,9 @@ avimsin-filter = "avimsin.filter:main"
 avimsin-score = "avimsin.score:main"
 avimsin-watch = "avimsin.watch:main"
 
+[dependency-groups]
+dev = ["pytest>=8"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

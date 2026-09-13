@@ -1,12 +1,15 @@
-"""Erken alıcı toplama: bir token'ın ilk sahiplerini Transfer olaylarından çıkarır."""
+"""Erken alıcı toplama: bir token'ın ilk sahiplerini Transfer olaylarından çıkarır.
+
+Ağ-bağımsız: ChainClient protokolünü dolduran her adaptörle çalışır
+(EVM ERC-20 logları, Solana SPL balance değişimleri).
+"""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..chains.base import TRANSFER_TOPIC, EvmClient
-
-ZERO_ADDRESS = "0x" + "0" * 40
+from ..chains.protocol import ChainClient
+from .transfers import ZERO_ADDRESS
 
 
 @dataclass(frozen=True)
@@ -18,32 +21,26 @@ class EarlyBuyer:
     tx: str
 
 
-def earliest_buyers(client: EvmClient, token: str, from_block: int, count: int) -> list[EarlyBuyer]:
+def earliest_buyers(client: ChainClient, token: str, from_block: int, count: int) -> list[EarlyBuyer]:
     """Token'ın `from_block` sonrasındaki ilk `count` farklı alıcısını bulur.
 
-    Mint'ler (from = 0x0) erken alıcı sayılmaz: ilk bakiye genelde kontrat
-    sahibinin cüzdanına gider, gerçek erken alıcı değildir.
+    Mint'ler (from = 0x0 / mint authority) erken alıcı sayılmaz: ilk bakiye
+    genelde dağıtıcı cüzdana gider, gerçek erken alıcı değildir.
     """
     latest = client.block_number()
-    token = token.lower()
     seen: set[str] = set()
     buyers: list[EarlyBuyer] = []
-    for log in client.iter_logs(from_block, latest, [TRANSFER_TOPIC], address=token):
-        topics = log.get("topics", [])
-        if len(topics) < 3:
-            continue  # ERC-20 Transfer 3 topic taşır; anormal logu atla
-        sender = "0x" + topics[1][-40:]
+    for event in client.token_transfers(token, from_block, latest):
+        sender = event.frm
         if sender == ZERO_ADDRESS:
-            continue  # mint: ilk bakiye kontrat sahibine gider, erken alıcı değildir
-        receiver = "0x" + topics[2][-40:]
+            continue  # mint: ilk bakiye dağıtıcıya gider, erken alıcı değildir
+        receiver = event.to
         if receiver == ZERO_ADDRESS:
             continue  # burn: yakılan bakiye sahipsizdir, alıcı değildir
         if receiver in seen:
             continue
         seen.add(receiver)
-        buyers.append(
-            EarlyBuyer(wallet=receiver, block=int(log["blockNumber"], 16), tx=log["transactionHash"])
-        )
+        buyers.append(EarlyBuyer(wallet=receiver, block=event.block, tx=event.tx))
         if len(buyers) >= count:
             return buyers
     return buyers

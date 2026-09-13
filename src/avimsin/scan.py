@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import argparse
 
-from .chains.robinhood import connect
+from .chains import open_chain
 from .collectors.early_buyers import earliest_buyers
 from .storage.db import connect as db_connect
 from .storage.db import save_coin, save_purchase
@@ -20,13 +20,16 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Bir token'ın erken alıcılarını zincirden toplar ve veritabanına yazar."
     )
-    parser.add_argument("token", help="ERC-20 token kontrat adresi")
+    parser.add_argument("token", help="Token adresi (EVM kontrat / SPL mint)")
     parser.add_argument("--from-block", type=int, required=True, help="Taramanın başlayacağı blok")
     parser.add_argument("--count", type=int, default=50, help="Kaç erken alıcı toplanacak")
+    parser.add_argument(
+        "--chain", default="robinhood", choices=["robinhood", "solana"], help="Zincir seçimi"
+    )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()
 
-    with connect() as client:
+    with open_chain(args.chain) as client:
         buyers = earliest_buyers(client, args.token, args.from_block, args.count)
 
     conn = db_connect(args.db)

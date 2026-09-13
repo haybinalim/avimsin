@@ -11,7 +11,7 @@ import argparse
 
 from .alerts.telegram import TelegramClient
 from .alerts.watcher import watch_loop
-from .chains.robinhood import connect
+from .chains import open_chain
 from .storage.db import connect as db_connect
 
 
@@ -23,13 +23,16 @@ def main() -> None:
     parser.add_argument(
         "--once", action="store_true", help="Tek tur tara ve çık (daemon modu için sürekli)"
     )
+    parser.add_argument(
+        "--chain", default="robinhood", choices=["robinhood", "solana"], help="Zincir seçimi"
+    )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()
 
     conn = db_connect(args.db)
     try:
         telegram = TelegramClient()
-        with connect() as client:
+        with open_chain(args.chain) as client:
             if args.once:
                 sent = watch_loop(client, conn, client, once=True, telegram=telegram)
                 print(f"{sent} bildirim gönderildi.")
