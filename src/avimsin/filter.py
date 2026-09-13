@@ -76,7 +76,12 @@ def main() -> None:
                     wallet=wallet, transfers=relevant, is_contract=_is_contract(client, wallet)
                 )
 
-        rules = [ContractRule(), RoundTripRule(), HighFrequencyRule(), DumpRule()]
+        rules = [
+            ContractRule(),
+            RoundTripRule(chain=args.chain),
+            HighFrequencyRule(),
+            DumpRule(chain=args.chain),
+        ]
         counts = {"bot": 0, "dump": 0, VERDICT_OK: 0}
         for wallet, hist in histories.items():
             verdict = VERDICT_OK
