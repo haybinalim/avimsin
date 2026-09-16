@@ -234,3 +234,23 @@ def test_solana_client_429_kaliciysa_runtime_error() -> None:
     client.rate_limit_retries = 1
     with pytest.raises(RuntimeError, match="429"):
         client.call("getSlot", [])
+
+def test_solana_v1_tx_parses_like_v0() -> None:
+    """v1 işlem (adres arama tablolu) v0 ile aynı delta'ları üretir (canlı mainnet)."""
+    tx_v0 = make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)])
+    tx_v1 = {
+        "transaction": {
+            "message": {
+                "accountKeys": tx_v0["transaction"]["message"]["accountKeys"],
+                "addressTableLookups": [
+                    {"accountKey": "LookUp11111111111111111111111111111111111", "readonlyIndexes": [], "writableIndexes": [0]}
+                ],
+            }
+        },
+        "meta": {**tx_v0["meta"], "version": 1},
+    }
+    adapter = sol_adapter({"v0sig": tx_v0, "v1sig": tx_v1}, [sig("v1sig", 12), sig("v0sig", 11)])
+    assert [(e.frm, e.to, e.value) for e in adapter.token_transfers(MINT, 1, 100)] == [
+        (S_ALICE, S_BOB, 100),
+        (S_ALICE, S_BOB, 100),
+    ]

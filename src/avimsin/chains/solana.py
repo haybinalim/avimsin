@@ -172,9 +172,13 @@ class SolanaClient:
 
     def get_transaction(self, signature: str) -> dict:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir)."""
+        # v1 işlemler (adres arama tablolu, örn. Jito demetleri) mainnet'te
+        # dolaşımda — 0 ile istenirse RPC -32015 döndürüp tüm aşama çöker
+        # (canlı BONK koşumunda görüldü). 1 ile hem v0 hem v1 decode edilir;
+        # delta okuma pre/post bakiyelerden yapıldığı için sürümden bağımsızdır.
         return self.call(
             "getTransaction",
-            [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
+            [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
         )
 
     def get_account_owner(self, address: str) -> str | None:
