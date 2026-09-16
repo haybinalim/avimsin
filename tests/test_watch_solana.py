@@ -69,12 +69,12 @@ def test_signature_cap_none_keeps_full_scan() -> None:
 def test_watch_skips_oversized_window_and_catches_up() -> None:
     conn = connect(":memory:")
     try:
-        save_coin(conn, MINT, 100)
+        save_coin(conn, MINT, 100, chain="solana")
         conn.commit()
         # 1000 → 51_000: 50_000 aralık > 10_000 sınır → tur atlanır.
         client = StubClient(slot=1000, then=51_000)
         sent = watch_loop(
-            client, conn, once=True, max_slots_per_poll=10_000, telegram=None
+            client, conn, once=True, max_slots_per_poll=10_000, telegram=None, chain="solana"
         )
         assert sent == 0
         assert client.calls == []  # tarama yok, sadece atlama
@@ -85,12 +85,14 @@ def test_watch_skips_oversized_window_and_catches_up() -> None:
 def test_watch_scans_when_within_window() -> None:
     conn = connect(":memory:")
     try:
-        save_coin(conn, MINT, 100)
+        save_coin(conn, MINT, 100, chain="solana")
         save_purchase(conn, MINT, SMART1, 101, "t1")
         save_verdict(conn, SMART1, "ok", "none", "geçti")
         conn.commit()
         client = StubClient(slot=1000, then=1500)  # 500 aralık ≤ 10_000 sınır
-        watch_loop(client, conn, once=True, max_slots_per_poll=10_000, telegram=None)
+        watch_loop(
+            client, conn, once=True, max_slots_per_poll=10_000, telegram=None, chain="solana"
+        )
         assert client.calls == [(1001, 1500)]
     finally:
         conn.close()
@@ -99,10 +101,12 @@ def test_watch_scans_when_within_window() -> None:
 def test_watch_disabled_cap_scans_everything() -> None:
     conn = connect(":memory:")
     try:
-        save_coin(conn, MINT, 100)
+        save_coin(conn, MINT, 100, chain="solana")
         conn.commit()
         client = StubClient(slot=1000, then=9_000_000)  # dev pencere; sınır None → taranır
-        watch_loop(client, conn, once=True, max_slots_per_poll=None, telegram=None)
+        watch_loop(
+            client, conn, once=True, max_slots_per_poll=None, telegram=None, chain="solana"
+        )
         assert client.calls == [(1001, 9_000_000)]
     finally:
         conn.close()
@@ -112,7 +116,7 @@ def test_watch_signal_emitted_end_to_end_solana() -> None:
     """Solana adaptörü + gerçek sinyal yolu: 2 smart wallet → eşik 2 → 1 sinyal."""
     conn = connect(":memory:")
     try:
-        save_coin(conn, MINT, 100)
+        save_coin(conn, MINT, 100, chain="solana")
         for w, tx in ((SMART1, "p1"), (SMART2, "p2")):
             save_purchase(conn, MINT, w, 101, tx)
             save_verdict(conn, w, "ok", "none", "geçti")
@@ -133,7 +137,9 @@ def test_watch_signal_emitted_end_to_end_solana() -> None:
         client = StubClient(slot=1000, then=1200)
         client.token_transfers = adapter.token_transfers  # type: ignore[method-assign]
 
-        sent = watch_loop(client, conn, once=True, threshold=2, telegram=None)
+        sent = watch_loop(
+            client, conn, once=True, threshold=2, telegram=None, chain="solana"
+        )
         assert sent == 1
     finally:
         conn.close()
@@ -143,7 +149,7 @@ def test_mint_events_do_not_produce_signal() -> None:
     """Mint (frm=ZERO) smart wallet alımı değildir; tek başına sinyal üretmez."""
     conn = connect(":memory:")
     try:
-        save_coin(conn, MINT, 100)
+        save_coin(conn, MINT, 100, chain="solana")
         save_purchase(conn, MINT, SMART1, 101, "p1")
         save_verdict(conn, SMART1, "ok", "none", "geçti")
         conn.commit()
@@ -158,7 +164,9 @@ def test_mint_events_do_not_produce_signal() -> None:
 
         client = StubClient(slot=1000, then=1200)
         client.token_transfers = adapter.token_transfers  # type: ignore[method-assign]
-        # Eşik 2: tek cüzdan → sinyal yok
-        assert watch_loop(client, conn, once=True, threshold=2, telegram=None) == 0
+        # Eşiği karşılayan tek smart wallet mint'i de sinyal olmamalı.
+        assert watch_loop(
+            client, conn, once=True, threshold=1, telegram=None, chain="solana"
+        ) == 0
     finally:
         conn.close()

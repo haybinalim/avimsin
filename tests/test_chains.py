@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+from avimsin.chains import base as evm_base
 from avimsin.chains.base import EvmAdapter, EvmClient
 from avimsin.chains.solana import SYSTEM_PROGRAM, SolanaAdapter, SolanaClient
 from avimsin.collectors.early_buyers import earliest_buyers
@@ -64,6 +67,33 @@ def test_earliest_buyers_works_through_protocol() -> None:
     buyers = earliest_buyers(adapter, TOKEN, 100, 10)
     assert [b.wallet for b in buyers] == [BOB, CAROL]
     assert buyers[0].block == 101
+
+
+@pytest.mark.parametrize("timeout_start", [1, 5])
+def test_evm_timeout_splits_preserve_every_log_in_order(monkeypatch, timeout_start):
+    monkeypatch.setattr(evm_base, "LOG_CHUNK", 4)
+    monkeypatch.setattr(evm_base, "CHUNK_DELAY", 0)
+
+    def get_logs(self, start, end, topics, address):
+        if start >= timeout_start and start < end:
+            raise RuntimeError("query timed out")
+        return [{"block": block} for block in range(start, end + 1)]
+
+    monkeypatch.setattr(EvmClient, "get_logs", get_logs)
+    with EvmClient("http://unused") as client:
+        assert list(client.iter_logs(1, 10, [])) == [
+            {"block": block} for block in range(1, 11)
+        ]
+
+
+def test_evm_single_block_timeout_remains_visible(monkeypatch):
+    def get_logs(self, start, end, topics, address):
+        raise RuntimeError("query timed out")
+
+    monkeypatch.setattr(EvmClient, "get_logs", get_logs)
+    with EvmClient("http://unused") as client:
+        with pytest.raises(RuntimeError, match="query timed out"):
+            list(client.iter_logs(1, 1, []))
 
 
 def sol_adapter(

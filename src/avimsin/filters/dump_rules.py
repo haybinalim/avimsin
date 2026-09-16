@@ -1,12 +1,13 @@
-"""Kaçak satış (paper-hand) kuralı.
+"""Fiyat-bağımsız, transfer miktarına dayalı kaçak satış göstergesi.
 
-Fiyat-bağımsız sürüm: cüzdan, aldığı miktarın `max_ratio`'dan fazlasını
-pencere içinde satarsa elenir. Pencere zincir-duyarlıdır: `window_blocks`
-doğrudan verilebilir (EVM çağrıları için); verilmezse `window_seconds`
-zincir aralığına bölünür. Argsız `DumpRule()` EVM varsayılanıyla
-(50_000 aralık) bit-bit aynı kalır.
-"Zarardayken" koşulu fiyat verisi gerektirir; Faz 3'teki P&L skorlamasıyla
-birlikte zenginleştirilecek.
+İlk pozitif, öz-transfer olmayan girişten başlayan kapalı penceredeki
+pozitif çıkış miktarı / giriş miktarı `max_ratio`'dan büyükse cüzdan elenir.
+Sıfır/negatif ve öz-transferler sayılmaz; mint/burn geçmiş modeliyle dışlanır.
+Transferler gerçek alım/satım kanıtı değildir; fiyat ve maliyet verisi
+olmadığından zarardayken satış koşulu değerlendirilmez.
+
+Pencere zincir-duyarlıdır: `window_blocks` doğrudan verilebilir; verilmezse
+`window_seconds` zincir aralığına bölünür. EVM varsayılanı 50_000 aralıktır.
 """
 
 from __future__ import annotations
@@ -16,7 +17,7 @@ from .chains import BLOCK_INTERVAL_SECONDS, DEFAULT_CHAIN, normalize_chain
 
 
 class DumpRule:
-    """Hızlı büyük satış yapan cüzdanları eler."""
+    """Kısa pencerede girişine oranla büyük token çıkışı olan cüzdanları eler."""
 
     name = "dump"
 
@@ -38,20 +39,35 @@ class DumpRule:
         self.window_blocks = window_blocks
 
     def check(self, history: WalletHistory) -> Verdict | None:
-        if not history.received:
+        received = history.received
+        first_in = min(
+            (t.block for t in received if t.value > 0 and t.frm != history.wallet),
+            default=None,
+        )
+        if first_in is None:
             return None
-        first_in = min(t.block for t in history.received)
         deadline = first_in + self.window_blocks
-        sold_in_window = sum(t.block <= deadline for t in history.sent)
-        if sold_in_window == 0:
+        received_in_window = sum(
+            t.value for t in received
+            if t.value > 0 and t.frm != history.wallet
+            and first_in <= t.block <= deadline
+        )
+        sent_in_window = sum(
+            t.value for t in history.sent
+            if t.value > 0 and t.to != history.wallet
+            and first_in <= t.block <= deadline
+        )
+        if received_in_window == 0 or sent_in_window == 0:
             return None
-        bought = len(history.received)
-        ratio = sold_in_window / bought
+        ratio = sent_in_window / received_in_window
         if ratio > self.max_ratio:
             unit = "slot" if self.chain == "solana" else "blok"
             return Verdict(
                 self.name,
                 "dump",
-                f"alım sayısı {bought}, ilk alımdan {self.window_blocks} {unit} içinde satış {sold_in_window} ({ratio:.0%})",
+                f"ilk girişten {self.window_blocks} {unit} içinde "
+                f"giriş miktarı {received_in_window}, çıkış miktarı {sent_in_window} "
+                f"ham token birimi ({ratio:.0%}); fiyat-bağımsız transfer göstergesi, "
+                "gerçek satış veya zarar doğrulanmaz",
             )
         return None

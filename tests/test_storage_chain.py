@@ -5,12 +5,16 @@ from __future__ import annotations
 import sqlite3
 
 import pandas as pd
+import pytest
 
 from avimsin.storage.db import (
+    check_coin_chain,
     coin_chains,
     connect,
     save_coin,
     save_purchase,
+    save_score,
+    save_verdict,
     set_chain,
     wallet_chains,
 )
@@ -113,10 +117,44 @@ def test_set_chain_only_fills_missing_value() -> None:
     try:
         save_coin(conn, EVM_COIN, 10, chain="robinhood")
         save_coin(conn, SOL_COIN, 20)  # zincirsiz kayıt
-        set_chain(conn, EVM_COIN, "solana")  # dolu: dokunmaz
+        with pytest.raises(ValueError):
+            set_chain(conn, EVM_COIN, "solana")
+        with pytest.raises(ValueError):
+            save_coin(conn, EVM_COIN, 99, chain="solana")
         set_chain(conn, SOL_COIN, "solana")  # boş: tamamlar
         conn.commit()
         assert coin_chains(conn) == {EVM_COIN.lower(): "robinhood", SOL_COIN: "solana"}
+    finally:
+        conn.close()
+
+
+def test_chain_check_requires_explicit_legacy_selection_without_writing() -> None:
+    conn = connect(":memory:")
+    try:
+        save_coin(conn, SOL_COIN, 20)
+        conn.commit()
+        with pytest.raises(ValueError):
+            check_coin_chain(conn, SOL_COIN, None)
+        assert check_coin_chain(conn, SOL_COIN, "solana") == "solana"
+        assert coin_chains(conn) == {}
+        assert not conn.in_transaction
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("verdict", ["bot", "dump", None])
+def test_ineligible_verdict_invalidates_score_in_same_transaction(verdict) -> None:
+    conn = connect(":memory:")
+    try:
+        save_purchase(conn, EVM_COIN, EVM_WALLET, 1, "tx")
+        save_verdict(conn, EVM_WALLET, "ok", "-", "passed")
+        save_score(conn, EVM_WALLET, 1.0, 0, 1, 0.1, 0.6)
+        conn.commit()
+        save_verdict(conn, EVM_WALLET, verdict, "rule", "not eligible")
+        assert conn.execute("SELECT wallet FROM scores").fetchall() == []
+        conn.rollback()
+        assert conn.execute("SELECT verdict FROM wallets").fetchone() == ("ok",)
+        assert conn.execute("SELECT wallet FROM scores").fetchall() == [(EVM_WALLET,)]
     finally:
         conn.close()
 

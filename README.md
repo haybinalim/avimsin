@@ -7,6 +7,24 @@ Telegram'dan haber verir.
 
 > Repo adı `avimsin` — GitHub Türkçe karakter desteklemediği için; proje adı **Avımsın**.
 
+## Mevcut doğruluk sınırı
+
+Bu sürüm transfer tabanlı bir göstergedir: token girişi doğrulanmış satın alma,
+token çıkışı satış değildir. Dump kuralı ilk geçerli girişten başlayan pencerede
+pozitif çıkış/giriş **miktarını** karşılaştırır; fiyat ve zarar koşulu henüz yoktur.
+Skorun oranı ekonomik winrate, net token akışı finansal P&L değildir. Skor/karar
+kayıtları hâlâ cüzdan genelindedir; farklı coinlerde ortak cüzdan sonuçları
+birbirini etkileyebilir. Gerçek swap, maliyet ve coin bazlı sonuç modeli eksiktir.
+
+`score` yalnız `verdict=ok` cüzdanları işler; yeniden çalıştırma bu coin'in
+alıcılarına ait eski skorları atomik yeniler (çıktısız/uygunsuz olanları kaldırır).
+Boş filtre geçmişi temiz sayılmaz. CLI token birimi gösterir; DB'deki net akış
+tam tokene yuvarlanır, panel hassasiyeti bu aşamada düzeltilmiş değildir.
+
+`watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Mint/burn,
+sıfır/negatif ve öz-transferler sayılmaz. Sinyal hâlâ tek poll penceresindedir;
+kalıcı cursor, teslimat kuyruğu ve tekrar bildirimi engeli henüz yoktur.
+
 ## Vizyon
 
 Örnek senaryo: popüler bir ağda (örn. Robinhood Chain) bir meme coin çok yükselir.
@@ -65,6 +83,10 @@ uv run pytest                 # test ağı (sahte EVM/Solana zincirleri, ağ yok
 `scan/filter/score/watch` komutları `--chain robinhood|solana` bayrağıyla zincir
 seçer (varsayılan `robinhood`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
 verilmezse public devnet ucu kullanılır.
+
+Kayıtlı zincir ile `--chain` uyuşmazsa scan/filter/score RPC sorgusundan önce
+durur. Zinciri bilinmeyen eski kayıtlarda `--chain` açıkça verilmelidir;
+başarılı işlemde kayıt tamamlanır. Watch bilinmeyen zincirli coinleri atlar.
 
 ## RPC Stratejisi
 

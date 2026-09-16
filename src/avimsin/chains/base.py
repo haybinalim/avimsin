@@ -164,12 +164,11 @@ class EvmClient:
             for attempt in range(CHUNK_RETRIES):
                 try:
                     logs = self.get_logs(start, next_end, topics, address)
-                    break
                 except RuntimeError as exc:
                     message = str(exc).lower()
                     if "timed out" in message and start < next_end:
                         mid = (start + next_end) // 2
-                        todo.append((next_end + 1, end))
+                        todo.appendleft((next_end + 1, end))
                         todo.appendleft((mid + 1, next_end))
                         todo.appendleft((start, mid))
                         break
@@ -177,12 +176,12 @@ class EvmClient:
                         time.sleep(CHUNK_RETRY_WAIT * (attempt + 1))
                         continue
                     raise
-            else:
-                continue
-            yield from logs
-            todo.append((next_end + 1, end))
-            if next_end < end:
-                time.sleep(CHUNK_DELAY)
+                else:
+                    yield from logs
+                    todo.appendleft((next_end + 1, end))
+                    if next_end < end:
+                        time.sleep(CHUNK_DELAY)
+                    break
 
     def close(self) -> None:
         self._http.close()
