@@ -27,10 +27,15 @@ from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu söz
 # owner'lı hesaplar program/SPL hesabıdır (is_contract → True).
 SYSTEM_PROGRAM = "11111111111111111111111111111111"
 
-# Public devnet/mainnet uçları rate limitliyor; EvmClient'la aynı ailede
-# hafif bir yeniden deneme penceresi tutuyoruz.
+# Public devnet/mainnet uçları periyodik (dakikalık) 429 kovasıyla sınırlar;
+# getTransaction gibi ağır çağrı serileri kovayı hızla tüketir. Ardışık
+# çağrılar arası asgari bekleme kovayı hiç zorlamaz; 429'da kova soğuyana dek
+# bekleyip yeniden denemek geçici tıkanmayı kalıcı hatadan ayırır.
 MAX_RETRIES = 3
 BASE_WAIT = 1.0
+MIN_INTERVAL_SECONDS = 0.9
+RATE_LIMIT_RETRIES = 8
+RATE_LIMIT_WAIT_SECONDS = 20.0
 SIG_PAGE_LIMIT = 1000
 
 
@@ -38,33 +43,68 @@ class SolanaClient:
     """Tek bir Solana JSON-RPC ucuna konuşan minimal istemci."""
 
     def __init__(
-        self, url: str, timeout: float = 30.0, transport: httpx.BaseTransport | None = None
+        self,
+        url: str,
+        timeout: float = 30.0,
+        transport: httpx.BaseTransport | None = None,
+        min_interval: float = MIN_INTERVAL_SECONDS,
+        rate_limit_retries: int = RATE_LIMIT_RETRIES,
+        rate_limit_wait: float = RATE_LIMIT_WAIT_SECONDS,
     ) -> None:
         self.url = url
         self._http = httpx.Client(timeout=timeout, transport=transport)
         self._next_id = 0
+        self._last_call = 0.0
+        self.min_interval = min_interval
+        self.rate_limit_retries = rate_limit_retries
+        self.rate_limit_wait = rate_limit_wait
 
     def call(self, method: str, params: list[Any]) -> Any:
         """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
 
-        429/5xx ve transport hatalarında küçük bir geri çekilmeyeyle yeniden
-        dener; kalıcı hatalarda RPC mesajıyla RuntimeError yükseltir.
+        429/5xx ve transport hatalarında yeniden dener: 429, periyodik kova
+        tıkanmasıdır — ``rate_limit_wait`` aralıklarla ``rate_limit_retries``
+        kez bekleyip tekrar dener (kova dakikalar içinde soğur); 5xx/transport
+        hatalarında kısa üstel geri çekilme uygular. Ardışık çağrılara
+        ``min_interval`` kadar asgari boşluk koyar ki kova hiç zorlanmasın.
+        Kalıcı hatalarda RPC mesajıyla RuntimeError yükseltir.
         """
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
         wait = BASE_WAIT
         for attempt in range(MAX_RETRIES):
+            if self.min_interval > 0:
+                remaining = self.min_interval - (time.monotonic() - self._last_call)
+                if remaining > 0:
+                    time.sleep(remaining)
+            self._last_call = time.monotonic()
             try:
                 response = self._http.post(self.url, json=payload)
             except httpx.TransportError:
                 if attempt == MAX_RETRIES - 1:
                     raise RuntimeError(f"{method}: RPC'ye ulaşılamadı") from None
                 time.sleep(wait)
-                wait *= 2
+                wait = min(wait * 2, 60.0)
                 continue
-            if response.status_code in {429, 502, 503, 504} and attempt < MAX_RETRIES - 1:
+            if response.status_code == 429:
+                response = self._wait_out_rate_limit(payload)
+                if response is None:
+                    raise RuntimeError(
+                        f"{method}: {self.rate_limit_retries} kez {self.rate_limit_wait}s "
+                        "beklemeye rağmen 429 (rate limit)"
+                    )
+                if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES - 1:
+                    time.sleep(wait)
+                    wait = min(wait * 2, 60.0)
+                    continue
+                response.raise_for_status()
+                data = response.json()
+                if "error" in data:
+                    raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
+                return data["result"]
+            if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES - 1:
                 time.sleep(wait)
-                wait *= 2
+                wait = min(wait * 2, 60.0)
                 continue
             response.raise_for_status()
             data = response.json()
@@ -72,6 +112,22 @@ class SolanaClient:
                 raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
             return data["result"]
         raise RuntimeError(f"{method}: {MAX_RETRIES} denemeden sonra RPC yanıt vermedi")
+
+    def _wait_out_rate_limit(self, payload: dict[str, Any]) -> httpx.Response | None:
+        """429 kovası soğuyana dek ``rate_limit_retries`` kez bekleyip yeniden dener.
+
+        429 dışı ilk yanıtı döndürür (çağıran normal hata yollarından geçirir);
+        kova hiç geçmezse None — çağıran kalıcı 429 RuntimeError'ını yükseltir.
+        """
+        for _ in range(self.rate_limit_retries):
+            time.sleep(self.rate_limit_wait)
+            try:
+                response = self._http.post(self.url, json=payload)
+            except httpx.TransportError:
+                continue
+            if response.status_code != 429:
+                return response
+        return None
 
     def get_slot(self) -> int:
         return int(self.call("getSlot", []))
@@ -116,9 +172,13 @@ class SolanaClient:
 
     def get_transaction(self, signature: str) -> dict:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir)."""
+        # v1 işlemler (adres arama tablolu, örn. Jito demetleri) mainnet'te
+        # dolaşımda — 0 ile istenirse RPC -32015 döndürüp tüm aşama çöker
+        # (canlı BONK koşumunda görüldü). 1 ile hem v0 hem v1 decode edilir;
+        # delta okuma pre/post bakiyelerden yapıldığı için sürümden bağımsızdır.
         return self.call(
             "getTransaction",
-            [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}],
+            [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
         )
 
     def get_account_owner(self, address: str) -> str | None:

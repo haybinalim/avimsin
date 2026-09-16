@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+
+import httpx
 import pytest
 
 from avimsin.chains import base as evm_base
@@ -105,7 +108,7 @@ def sol_adapter(
     chain = FakeSolanaChain(
         signatures=sigs, transactions=txs, owners=owners, decimals=decimals
     )
-    return SolanaAdapter(SolanaClient("http://sahte", transport=chain.transport()))
+    return SolanaAdapter(SolanaClient("http://sahte", transport=chain.transport(), min_interval=0.0))
 
 
 def sig(name: str, slot: int, err: dict | None = None) -> dict:
@@ -191,3 +194,63 @@ def test_solana_is_contract_decimals_slot() -> None:
     assert adapter.is_contract("olmayan") is False
     assert adapter.decimals(MINT) == 6
     assert adapter.block_number() == 1_000
+
+
+def _client_with_handler(handler) -> SolanaClient:
+    return SolanaClient(
+        "http://sahte",
+        transport=httpx.MockTransport(handler),
+        min_interval=0.0,
+        rate_limit_retries=5,
+        rate_limit_wait=0.01,
+    )
+
+
+def test_solana_client_429_kova_gecince_surdurur() -> None:
+    """429 kovası soğuyunca aynı çağrı sonuçla döner (canlı mainnet gözlemi)."""
+
+    hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        hits["n"] += 1
+        if hits["n"] < 3:
+            return httpx.Response(429, json={"jsonrpc": "2.0", "error": {"code": -32029}, "id": payload["id"]})
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": 41})
+
+    client = _client_with_handler(handler)
+    assert client.call("getSlot", []) == 41
+    assert hits["n"] == 3  # 1 asıl + 2 kova beklemesi
+
+
+def test_solana_client_429_kaliciysa_runtime_error() -> None:
+    """Kova hiç geçmezse RuntimeError yükselir — sayısız bekleme yok."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        return httpx.Response(429, json={"jsonrpc": "2.0", "error": {"code": -32029}, "id": payload["id"]})
+
+    client = _client_with_handler(handler)
+    client.rate_limit_retries = 1
+    with pytest.raises(RuntimeError, match="429"):
+        client.call("getSlot", [])
+
+def test_solana_v1_tx_parses_like_v0() -> None:
+    """v1 işlem (adres arama tablolu) v0 ile aynı delta'ları üretir (canlı mainnet)."""
+    tx_v0 = make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)])
+    tx_v1 = {
+        "transaction": {
+            "message": {
+                "accountKeys": tx_v0["transaction"]["message"]["accountKeys"],
+                "addressTableLookups": [
+                    {"accountKey": "LookUp11111111111111111111111111111111111", "readonlyIndexes": [], "writableIndexes": [0]}
+                ],
+            }
+        },
+        "meta": {**tx_v0["meta"], "version": 1},
+    }
+    adapter = sol_adapter({"v0sig": tx_v0, "v1sig": tx_v1}, [sig("v1sig", 12), sig("v0sig", 11)])
+    assert [(e.frm, e.to, e.value) for e in adapter.token_transfers(MINT, 1, 100)] == [
+        (S_ALICE, S_BOB, 100),
+        (S_ALICE, S_BOB, 100),
+    ]
