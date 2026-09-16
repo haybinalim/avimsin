@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from avimsin.alerts.watcher import detect_signals
+import pytest
+
+from avimsin.alerts.watcher import detect_signals, format_signal, watch_loop
 from avimsin.collectors.transfers import ZERO_ADDRESS, TransferEvent
-from avimsin.storage.db import connect, save_coin, save_purchase
+from avimsin.storage.db import connect, save_coin, save_purchase, save_verdict
 
 COIN = "0x" + "aa" * 20
 W1 = "0x" + "11" * 20
@@ -14,13 +16,20 @@ W3 = "0x" + "33" * 20
 
 def memdb():
     conn = connect(":memory:")
-    save_coin(conn, COIN, 100)
+    save_coin(conn, COIN, 100, chain="robinhood")
     conn.commit()
     return conn
 
 
-def ev(frm: str, to: str, block: int = 101, tx: str = "0xtx", token: str = COIN) -> TransferEvent:
-    return TransferEvent(frm=frm, to=to, block=block, tx=tx, value=10, token=token)
+def ev(
+    frm: str,
+    to: str,
+    block: int = 101,
+    tx: str = "0xtx",
+    token: str = COIN,
+    value: int = 10,
+) -> TransferEvent:
+    return TransferEvent(frm=frm, to=to, block=block, tx=tx, value=value, token=token)
 
 
 def test_detect_groups_by_token_not_sender() -> None:
@@ -56,6 +65,69 @@ def test_smart_wallet_filter_applies() -> None:
             len(detect_signals(conn, events, threshold=1, smart_wallets={W2})) == 1
         )
         assert detect_signals(conn, events, threshold=2, smart_wallets={W2}) == []
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    "frm,to,value",
+    [(ZERO_ADDRESS, W2, 10), (W1, ZERO_ADDRESS, 10), (W1, W2, 0), (W1, W2, -1), (W2, W2, 10)],
+)
+def test_non_transfer_inflows_do_not_meet_threshold(frm, to, value) -> None:
+    conn = memdb()
+    try:
+        events = [ev(frm, to, value=value), ev(W1, W3)]
+        assert detect_signals(conn, events, threshold=2) == []
+        signals = detect_signals(conn, [ev(W1, W2), ev(W1, W3)], threshold=2)
+        assert signals[0].wallets == [W2, W3]
+    finally:
+        conn.close()
+
+
+def test_signal_pairs_sorted_wallets_with_their_earliest_blocks() -> None:
+    conn = memdb()
+    try:
+        events = [ev(W1, W3, block=120), ev(W1, W2, block=115), ev(W1, W3, block=105)]
+        signal = detect_signals(conn, events, threshold=2)[0]
+        assert signal.wallets == [W2, W3]
+        assert signal.blocks == [115, 105]
+        message = format_signal(signal, threshold=2)
+        assert f"<code>{W2}</code> (blok 115)" in message
+        assert f"<code>{W3}</code> (blok 105)" in message
+        assert detect_signals(conn, events, threshold=3) == []
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize("chain", ["robinhood", "solana"])
+def test_watch_queries_only_selected_chain_and_uses_its_smart_wallets(chain) -> None:
+    conn = connect(":memory:")
+    coins = {"robinhood": COIN, "solana": "M" * 44, None: "U" * 44}
+    wallets = {"robinhood": W2, "solana": "S" * 44, None: "N" * 44}
+
+    class Client:
+        def __init__(self):
+            self.blocks = iter([100, 110])
+            self.queried = []
+
+        def block_number(self):
+            return next(self.blocks)
+
+        def token_transfers(self, coin, start, end):
+            self.queried.append(coin)
+            # Yabancı zincir/NULL geçmişli smart wallet da aynı tokene girebilir.
+            return [ev(W1, wallet, token=coin) for wallet in wallets.values()]
+
+    try:
+        for coin_chain, coin in coins.items():
+            save_coin(conn, coin, 100, chain=coin_chain)
+            save_purchase(conn, coin, wallets[coin_chain], 100, f"p-{coin_chain}")
+            save_verdict(conn, wallets[coin_chain], "ok", "none", "geçti")
+        conn.commit()
+        for threshold, expected in [(2, 0), (1, 1)]:
+            client = Client()
+            assert watch_loop(client, conn, once=True, threshold=threshold, chain=chain) == expected
+            assert client.queried == [coins[chain]]
     finally:
         conn.close()
 

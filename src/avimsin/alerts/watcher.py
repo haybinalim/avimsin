@@ -1,8 +1,8 @@
-"""Sinyal izleyici: yeni blokları tarar, smart wallet alımlarını eşikle karşılaştırır.
+"""Sinyal izleyici: smart wallet'lara pozitif token girişlerini eşikle karşılaştırır.
 
-Sinyal mantığı: verilen smart wallet listesinde (verdict=ok) en az `threshold`
-farklı cüzdan aynı coini aldıysa uyarı üretilir. Bildirim Telegram'a gider;
-aynı (coin, wallet) çifti tekrar bildirim üretmez (purchases PK zaten tekil).
+En az ``threshold`` farklı cüzdana aynı token girdiyse uyarı üretilir.
+Transferler swap/alım kanıtı değildir; mint, burn ve self transferler sayılmaz.
+Yalnız mevcut tarama aralığı değerlendirilir; kalıcı tekrar bildirimi engeli yoktur.
 """
 
 from __future__ import annotations
@@ -12,14 +12,14 @@ import time
 from dataclasses import dataclass
 
 from ..chains.protocol import ChainClient
-from ..collectors.transfers import TransferEvent
+from ..collectors.transfers import ZERO_ADDRESS, TransferEvent
 from ..config import settings
 from .telegram import TelegramClient
 
 
 @dataclass(frozen=True)
 class Signal:
-    """Eşik aşımı: bir coin için kaç smart wallet aldı."""
+    """Eşik aşımı: token giren cüzdanlar ve her birinin ilk blok/slot'u."""
 
     coin: str
     wallets: list[str]
@@ -32,17 +32,21 @@ def detect_signals(
     threshold: int,
     smart_wallets: set[str] | None = None,
 ) -> list[Signal]:
-    """Yeni alımlar arasında eşik aşan coin'leri bulur.
+    """Pozitif token girişleri arasında eşik aşan coin'leri bulur; swap çözümlemez.
 
     Coin eşleşmesi olayın ``token`` alanıyla yapılır (EVM kontratı / SPL mint):
     transferin `frm`'i gönderen cüzlandır, token'ın kendisi değil.
-    smart_wallets None ise purchases tablosundaki tüm cüzdanlar sayılır
-    (verdict filtresi CLI tarafında uygulanır).
+    smart_wallets None ise olaylardaki tüm uygun alıcılar sayılır.
+    Aynı cüzdanın tekrarlı girişleri tek sayılır; en erken blok/slot saklanır.
     """
     relevant = [
         e
         for e in events
-        if smart_wallets is None or e.to in smart_wallets
+        if e.value > 0
+        and e.frm != ZERO_ADDRESS
+        and e.to != ZERO_ADDRESS
+        and e.frm != e.to
+        and (smart_wallets is None or e.to in smart_wallets)
     ]
     by_coin: dict[str, list[TransferEvent]] = {}
     for e in relevant:
@@ -55,13 +59,16 @@ def detect_signals(
 
     signals = []
     for coin, coin_events in by_coin.items():
-        wallets = {e.to for e in coin_events}
+        first_blocks: dict[str, int] = {}
+        for e in coin_events:
+            first_blocks[e.to] = min(first_blocks.get(e.to, e.block), e.block)
+        wallets = sorted(first_blocks)
         if len(wallets) >= threshold:
             signals.append(
                 Signal(
                     coin=coin,
-                    wallets=sorted(wallets),
-                    blocks=[e.block for e in coin_events],
+                    wallets=wallets,
+                    blocks=[first_blocks[wallet] for wallet in wallets],
                 )
             )
     return signals
@@ -72,7 +79,8 @@ def format_signal(signal: Signal, threshold: int) -> str:
     lines = [
         f"🏹 <b>Avımsın sinyali</b>",
         f"Coin: <code>{signal.coin}</code>",
-        f"{len(signal.wallets)}/{threshold} smart wallet aldı:",
+        f"{len(signal.wallets)}/{threshold} smart wallet'a token girişi:",
+        "Transfer tabanlı gösterge; doğrulanmış swap/alım değildir.",
     ]
     for w, b in zip(signal.wallets, signal.blocks):
         lines.append(f"  • <code>{w}</code> (blok {b})")
@@ -88,10 +96,13 @@ def watch_loop(
     telegram: TelegramClient | None = None,
     once: bool = False,
     max_slots_per_poll: int | None = None,
+    chain: str = "robinhood",
 ) -> int:
-    """İzleme döngüsü: yeni bloklardaki alımları tarar, sinyal üretilirse bildirir.
+    """Seçilen zincirdeki yeni token girişlerini tarar ve eşik aşımını bildirir.
 
     Döndürür: gönderilen bildirim sayısı (once=True tek tur çalışır).
+    Coin'ler ve smart wallet geçmişi yalnız ``chain`` ile seçilir; zinciri
+    bilinmeyen (NULL) coin'ler dahil edilmez, adres biçiminden zincir tahmin edilmez.
     ``max_slots_per_poll``: Solana gibi hızlı zincirlerde tek turda geriye
     dönük taranacak en fazla aralık. Pencere aşılırsa tur atlanır, `last_block`
     güncele çekilir (eski aralık bir daha denenmez — eksik veri sessizce
@@ -114,13 +125,21 @@ def watch_loop(
                 )
                 last_block = latest
             else:
-                # İzlenen coin'lerin alımlarını yeni bloklardan çek
-                coins = [r[0] for r in conn.execute("SELECT address FROM coins").fetchall()]
+                # Yalnız açıkça seçilen zincirin coin'lerini sorgula.
+                coins = [
+                    r[0]
+                    for r in conn.execute(
+                        "SELECT address FROM coins WHERE chain = ?", (chain,)
+                    ).fetchall()
+                ]
                 smart_wallets = {
                     r[0]
                     for r in conn.execute(
-                        "SELECT DISTINCT wallet FROM purchases WHERE wallet IN"
-                        " (SELECT address FROM wallets WHERE verdict = 'ok')"
+                        "SELECT DISTINCT p.wallet FROM purchases p"
+                        " JOIN coins c ON c.address = p.coin"
+                        " JOIN wallets w ON w.address = p.wallet"
+                        " WHERE c.chain = ? AND w.verdict = 'ok'",
+                        (chain,),
                     ).fetchall()
                 }
                 events: list[TransferEvent] = []
@@ -128,11 +147,11 @@ def watch_loop(
                     events.extend(
                         client.token_transfers(coin, last_block + 1, latest)
                     )
-                # Sadece smart wallet alımları sinyal adayı; coin eşleşmesini
-                # detect_signals olayın token alanıyla yapar.
-                events = [e for e in events if e.to in smart_wallets]
+                # İstemciden gelen olaylar da seçili coin ve cüzdan bağlamında kalır.
+                watched_coins = set(coins)
+                events = [e for e in events if e.token in watched_coins]
 
-                for signal in detect_signals(conn, events, threshold):
+                for signal in detect_signals(conn, events, threshold, smart_wallets):
                     text = format_signal(signal, threshold)
                     if telegram is not None:
                         telegram.send_message(text=text)

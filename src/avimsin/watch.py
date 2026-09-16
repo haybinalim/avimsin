@@ -1,4 +1,4 @@
-"""avimsin-watch: smart wallet alım sinyallerini izler, Telegram'a bildirir.
+"""avimsin-watch: smart wallet token girişlerini izler, Telegram'a bildirir.
 
 Kullanım::
 
@@ -19,7 +19,7 @@ from .storage.db import connect as db_connect
 def main() -> None:
     """CLI giriş noktası."""
     parser = argparse.ArgumentParser(
-        description="Smart wallet alım sinyallerini izler; eşik aşımında Telegram'a bildirir."
+        description="Smart wallet token girişlerini izler; transferler doğrulanmış alım değildir."
     )
     parser.add_argument(
         "--once", action="store_true", help="Tek tur tara ve çık (daemon modu için sürekli)"
@@ -35,7 +35,9 @@ def main() -> None:
         telegram = TelegramClient()
         with open_chain(args.chain) as client:
             if args.once:
-                sent = watch_loop(client, conn, client, once=True, telegram=telegram)
+                sent = watch_loop(
+                    client, conn, client, once=True, telegram=telegram, chain=args.chain
+                )
                 print(f"{sent} bildirim gönderildi.")
             else:
                 window = settings.watch_max_slots_per_poll
@@ -44,7 +46,7 @@ def main() -> None:
                     f"İzleme başladı ({args.chain}, yoklama: {settings.watch_poll_seconds}s{window_note})."
                     " Ctrl+C ile durdurun."
                 )
-                watch_loop(client, conn, client, telegram=telegram)
+                watch_loop(client, conn, client, telegram=telegram, chain=args.chain)
     except KeyboardInterrupt:
         print("\nİzleme durduruldu.")
     finally:

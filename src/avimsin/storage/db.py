@@ -84,6 +84,20 @@ def connect(path: str | Path) -> sqlite3.Connection:
     return conn
 
 
+def check_coin_chain(conn: sqlite3.Connection, address: str, chain: str | None) -> str:
+    """Seçimi yazmadan doğrular; legacy NULL kayıt açık zincir seçimi ister."""
+    address = normalize_address(address)
+    row = conn.execute("SELECT chain FROM coins WHERE address = ?", (address,)).fetchone()
+    if row is not None and row[0] is None and chain is None:
+        raise ValueError(f"{address} zinciri bilinmiyor; açıkça --chain belirtin.")
+    selected = chain if chain is not None else "robinhood"
+    if selected not in ("robinhood", "solana"):
+        raise ValueError(f"Desteklenmeyen zincir: {selected}")
+    if row is not None and row[0] is not None and row[0] != selected:
+        raise ValueError(f"{address} kayıtlı zinciri {row[0]}; seçilen zincir {selected} ile uyuşmuyor.")
+    return selected
+
+
 def save_coin(
     conn: sqlite3.Connection, address: str, first_block: int, chain: str | None = None
 ) -> None:
@@ -91,6 +105,8 @@ def save_coin(
 
     Mevcut kaydın `first_block`'u korunur — yeniden tarama ilk bloğu bozmasın.
     """
+    if chain is not None:
+        check_coin_chain(conn, address, chain)
     conn.execute(
         "INSERT INTO coins (address, first_block, chain) VALUES (?, ?, ?)"
         " ON CONFLICT(address) DO UPDATE SET chain = COALESCE(coins.chain, excluded.chain)",
@@ -100,6 +116,7 @@ def save_coin(
 
 def set_chain(conn: sqlite3.Connection, address: str, chain: str) -> None:
     """Zinciri yalnızca kayıtta yoksa yazar (legacy kayıtların tamamlanması)."""
+    check_coin_chain(conn, address, chain)
     conn.execute(
         "UPDATE coins SET chain = ? WHERE address = ? AND chain IS NULL",
         (chain, normalize_address(address)),
@@ -145,15 +162,19 @@ def save_purchase(conn: sqlite3.Connection, coin: str, wallet: str, block: int, 
     )
 
 
-def save_verdict(conn: sqlite3.Connection, wallet: str, verdict: str, rule: str, reason: str) -> None:
-    """Filtre sonucunu cüzdan kaydına işler."""
+def save_verdict(
+    conn: sqlite3.Connection, wallet: str, verdict: str | None, rule: str, reason: str
+) -> None:
+    """Filtre sonucunu işler; uygun olmayan cüzdanın global skorunu geçersiz kılar."""
     conn.execute(
         "UPDATE wallets SET verdict = ?, verdict_rule = ?, verdict_reason = ? WHERE address = ?",
         (verdict, rule, reason, normalize_address(wallet)),
     )
+    if verdict != VERDICT_OK:
+        conn.execute("DELETE FROM scores WHERE wallet = ?", (normalize_address(wallet),))
 
 
-TOKEN_UNIT = 10**18  # ERC-20 standart ondalığı; P&L ham birimden buna çevrilir
+TOKEN_UNIT = 10**18  # Varsayılan token birimi; net akış finansal P&L değildir.
 
 
 def save_score(
@@ -168,10 +189,10 @@ def save_score(
 ) -> None:
     """Skor tablosuna yazar veya günceller.
 
-    ``net_pnl`` ham token biriminden tam token birimine ``token_unit`` ile
-    çevrilerek saklanır: milyar-arzlı token'ların tek transferi 10^27 ham birim
-    taşıyabilir, SQLite INTEGER sınırı 9.2*10^18'dir. Sıralama ölçeği korunur.
-    ``token_unit`` = 10**decimals; EVM'de 18, Solana'da mint'ten okunur.
+    ``net_pnl`` eski kolon adıdır: çıkış eksi giriş token akış proxy'si,
+    finansal P&L değil. Ham birim ``token_unit`` ile tam tokena çevrilir;
+    kesir hassasiyeti bu şemada korunmaz. SQLite INTEGER taşmasını sınırlar.
+    ``token_unit`` = 10**decimals; adaptörün bildirdiği hassasiyet kullanılır.
     """
     pnl_in_tokens = net_pnl // token_unit
     conn.execute(

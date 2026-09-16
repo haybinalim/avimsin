@@ -12,7 +12,7 @@ import argparse
 from .chains import open_chain
 from .collectors.early_buyers import earliest_buyers
 from .storage.db import connect as db_connect
-from .storage.db import save_coin, save_purchase
+from .storage.db import check_coin_chain, save_coin, save_purchase
 
 
 def main() -> None:
@@ -24,20 +24,24 @@ def main() -> None:
     parser.add_argument("--from-block", type=int, required=True, help="Taramanın başlayacağı blok")
     parser.add_argument("--count", type=int, default=50, help="Kaç erken alıcı toplanacak")
     parser.add_argument(
-        "--chain", default="robinhood", choices=["robinhood", "solana"], help="Zincir seçimi"
+        "--chain", default=None, choices=["robinhood", "solana"],
+        help="Zincir seçimi (varsayılan: robinhood; eski zincirsiz kayıt için zorunlu)",
     )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()
 
-    with open_chain(args.chain) as client:
-        buyers = earliest_buyers(client, args.token, args.from_block, args.count)
-
     conn = db_connect(args.db)
     try:
-        save_coin(conn, args.token, args.from_block, chain=args.chain)
-        for buyer in buyers:
-            save_purchase(conn, args.token, buyer.wallet, buyer.block, buyer.tx)
-        conn.commit()
+        try:
+            chain = check_coin_chain(conn, args.token, args.chain)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        with open_chain(chain) as client:
+            buyers = earliest_buyers(client, args.token, args.from_block, args.count)
+        with conn:
+            save_coin(conn, args.token, args.from_block, chain=chain)
+            for buyer in buyers:
+                save_purchase(conn, args.token, buyer.wallet, buyer.block, buyer.tx)
     finally:
         conn.close()
 
