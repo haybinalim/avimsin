@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 import httpx
 import pytest
@@ -236,21 +237,92 @@ def test_solana_client_429_kaliciysa_runtime_error() -> None:
         client.call("getSlot", [])
 
 def test_solana_v1_tx_parses_like_v0() -> None:
-    """v1 işlem (adres arama tablolu) v0 ile aynı delta'ları üretir (canlı mainnet)."""
+    """v1 işlem v0 ile aynı delta'ları üretir (canlı mainnet; sürüm üst seviyededir)."""
     tx_v0 = make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)])
     tx_v1 = {
-        "transaction": {
-            "message": {
-                "accountKeys": tx_v0["transaction"]["message"]["accountKeys"],
-                "addressTableLookups": [
-                    {"accountKey": "LookUp11111111111111111111111111111111111", "readonlyIndexes": [], "writableIndexes": [0]}
-                ],
-            }
-        },
-        "meta": {**tx_v0["meta"], "version": 1},
+        "slot": 12,
+        "transaction": tx_v0["transaction"],
+        "meta": tx_v0["meta"],
+        "version": 1,  # gerçek RPC yanıtında sürüm sonuç kökündedir
     }
     adapter = sol_adapter({"v0sig": tx_v0, "v1sig": tx_v1}, [sig("v1sig", 12), sig("v0sig", 11)])
     assert [(e.frm, e.to, e.value) for e in adapter.token_transfers(MINT, 1, 100)] == [
         (S_ALICE, S_BOB, 100),
         (S_ALICE, S_BOB, 100),
     ]
+
+def test_solana_client_paces_normal_calls() -> None:
+    """Ardışık normal çağrılar min_interval kadar aralanır (ölçülü)."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": 7})
+
+    client = SolanaClient(
+        "http://sahte", transport=httpx.MockTransport(handler), min_interval=0.05
+    )
+    start = time.monotonic()
+    assert client.call("getSlot", []) == 7
+    assert client.call("getSlot", []) == 7
+    assert time.monotonic() - start >= 0.04
+
+
+def test_solana_client_paces_after_429_recovery() -> None:
+    """429 iç-retry'si bekler; kova sonrası çağrı da aralanır (ölçülü)."""
+    hits = {"n": 0}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        hits["n"] += 1
+        if hits["n"] == 1:
+            return httpx.Response(429, json={"jsonrpc": "2.0", "error": {"code": -32029}, "id": payload["id"]})
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": 9})
+
+    client = SolanaClient(
+        "http://sahte",
+        transport=httpx.MockTransport(handler),
+        min_interval=0.05,
+        rate_limit_retries=3,
+        rate_limit_wait=0.05,
+    )
+    start = time.monotonic()
+    assert client.call("getSlot", []) == 9  # 1 asıl + 1 kova beklemesi
+    assert hits["n"] == 2
+    assert time.monotonic() - start >= 0.04
+    # Kova çıkışındaki retry _last_call'u tazeledi; sonraki çağrı aralanır.
+    # (Tazeleme yoksa bu çağrı beklemez, süre ~0 olurdu.)
+    start = time.monotonic()
+    assert client.call("getSlot", []) == 9
+    assert time.monotonic() - start >= 0.04
+
+
+def test_solana_get_transaction_sends_max_supported_1() -> None:
+    """İstemci sürüm 1 ister; 0 isteyen reddedilir (gerçek RPC -32015 modeli)."""
+    seen = {}
+    tx_v1 = {
+        "slot": 12,
+        "transaction": make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)])["transaction"],
+        "meta": make_balance_tx(MINT, [(S_ALICE, 100)], [(S_BOB, 100)])["meta"],
+        "version": 1,
+    }
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payload = json.loads(request.read())
+        max_supported = payload["params"][1].get("maxSupportedTransactionVersion")
+        seen["max_supported"] = max_supported
+        if max_supported != 1:
+            return httpx.Response(
+                200,
+                json={
+                    "jsonrpc": "2.0",
+                    "error": {"code": -32015, "message": "Transaction version (1) is not supported"},
+                    "id": payload["id"],
+                },
+            )
+        return httpx.Response(200, json={"jsonrpc": "2.0", "id": payload["id"], "result": tx_v1})
+
+    client = SolanaClient("http://sahte", transport=httpx.MockTransport(handler), min_interval=0.0)
+    assert client.get_transaction("v1sig")["version"] == 1
+    assert seen["max_supported"] == 1
+    with pytest.raises(RuntimeError, match="-32015"):
+        client.call("getTransaction", ["v1sig", {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 0}])
