@@ -34,7 +34,7 @@ def main() -> None:
 
     conn = db_connect(args.db)
     try:
-        save_coin(conn, args.token, args.from_block)
+        save_coin(conn, args.token, args.from_block, chain=args.chain)
         for buyer in buyers:
             save_purchase(conn, args.token, buyer.wallet, buyer.block, buyer.tx)
         conn.commit()

@@ -15,7 +15,7 @@ from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
 from .filters.dump_rules import DumpRule
 from .storage.db import connect as db_connect
-from .storage.db import normalize_address, save_verdict
+from .storage.db import normalize_address, save_verdict, set_chain
 
 
 def _is_contract(client: ChainClient, wallet: str) -> bool:
@@ -56,6 +56,7 @@ def main() -> None:
             from_block = row[0]
         else:
             from_block = args.from_block
+        set_chain(conn, coin, args.chain)
 
         wallets = [
             r[0]
