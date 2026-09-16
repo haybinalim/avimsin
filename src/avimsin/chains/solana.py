@@ -118,6 +118,8 @@ class SolanaClient:
 
         429 dışı ilk yanıtı döndürür (çağıran normal hata yollarından geçirir);
         kova hiç geçmezse None — çağıran kalıcı 429 RuntimeError'ını yükseltir.
+        Her deneme ``_last_call``'u tazeler: kova sonrası çağrı da pacing'e
+        uyar, kova çıkış anında seri ateşlenmez.
         """
         for _ in range(self.rate_limit_retries):
             time.sleep(self.rate_limit_wait)
@@ -125,6 +127,8 @@ class SolanaClient:
                 response = self._http.post(self.url, json=payload)
             except httpx.TransportError:
                 continue
+            finally:
+                self._last_call = time.monotonic()
             if response.status_code != 429:
                 return response
         return None
@@ -172,10 +176,12 @@ class SolanaClient:
 
     def get_transaction(self, signature: str) -> dict:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir)."""
-        # v1 işlemler (adres arama tablolu, örn. Jito demetleri) mainnet'te
-        # dolaşımda — 0 ile istenirse RPC -32015 döndürüp tüm aşama çöker
-        # (canlı BONK koşumunda görüldü). 1 ile hem v0 hem v1 decode edilir;
-        # delta okuma pre/post bakiyelerden yapıldığı için sürümden bağımsızdır.
+        # Sürüm 1 işlemler mainnet'te dolaşımda (4096 bayt limit + mesaj-içi
+        # kaynak limitleri; arama tabloları v0'a özgüdür). 0 ile istenirse RPC
+        # -32015 döndürüp tüm aşama çöker (canlı BONK koşumunda görüldü);
+        # resmî belge 0'ın v1'de, boş değerin v0'da patladığını söyler, 1 hepsini
+        # kapsar. Delta okuma pre/post bakiyelerden yapıldığı için sürümden
+        # bağımsızdır.
         return self.call(
             "getTransaction",
             [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
