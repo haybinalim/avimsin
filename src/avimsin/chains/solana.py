@@ -27,10 +27,8 @@ from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu söz
 # owner'lı hesaplar program/SPL hesabıdır (is_contract → True).
 SYSTEM_PROGRAM = "11111111111111111111111111111111"
 
-# Public devnet/mainnet uçları periyodik (dakikalık) 429 kovasıyla sınırlar;
-# getTransaction gibi ağır çağrı serileri kovayı hızla tüketir. Ardışık
-# çağrılar arası asgari bekleme kovayı hiç zorlamaz; 429'da kova soğuyana dek
-# bekleyip yeniden denemek geçici tıkanmayı kalıcı hatadan ayırır.
+# Pacing istemci yükünü sınırlar; paylaşımlı public RPC kovası yine 429 verebilir.
+# Rate-limit ve transport/5xx bütçeleri ayrı ve çağrı başına sonludur.
 MAX_RETRIES = 3
 BASE_WAIT = 1.0
 MIN_INTERVAL_SECONDS = 0.9
@@ -54,84 +52,52 @@ class SolanaClient:
         self.url = url
         self._http = httpx.Client(timeout=timeout, transport=transport)
         self._next_id = 0
-        self._last_call = 0.0
+        self._last_call: float | None = None
         self.min_interval = min_interval
         self.rate_limit_retries = rate_limit_retries
         self.rate_limit_wait = rate_limit_wait
 
-    def call(self, method: str, params: list[Any]) -> Any:
-        """Bir JSON-RPC çağrısı yapar; RPC hatasında RuntimeError fırlatır.
+    def _post(self, payload: dict[str, Any]) -> httpx.Response:
+        """Normal ve retry isteklerinin tamamına aynı pacing sınırını uygular."""
+        if self._last_call is not None:
+            remaining = self.min_interval - (time.monotonic() - self._last_call)
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last_call = time.monotonic()
+        return self._http.post(self.url, json=payload)
 
-        429/5xx ve transport hatalarında yeniden dener: 429, periyodik kova
-        tıkanmasıdır — ``rate_limit_wait`` aralıklarla ``rate_limit_retries``
-        kez bekleyip tekrar dener (kova dakikalar içinde soğur); 5xx/transport
-        hatalarında kısa üstel geri çekilme uygular. Ardışık çağrılara
-        ``min_interval`` kadar asgari boşluk koyar ki kova hiç zorlanmasın.
-        Kalıcı hatalarda RPC mesajıyla RuntimeError yükseltir.
-        """
+    def call(self, method: str, params: list[Any]) -> Any:
+        """429 ile transport/5xx hatalarını sınırlı bütçelerle yeniden dener."""
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
+        rate_retries = failures = 0
         wait = BASE_WAIT
-        for attempt in range(MAX_RETRIES):
-            if self.min_interval > 0:
-                remaining = self.min_interval - (time.monotonic() - self._last_call)
-                if remaining > 0:
-                    time.sleep(remaining)
-            self._last_call = time.monotonic()
+        while True:
             try:
-                response = self._http.post(self.url, json=payload)
+                response = self._post(payload)
             except httpx.TransportError:
-                if attempt == MAX_RETRIES - 1:
+                failures += 1
+                if failures >= MAX_RETRIES:
                     raise RuntimeError(f"{method}: RPC'ye ulaşılamadı") from None
-                time.sleep(wait)
-                wait = min(wait * 2, 60.0)
-                continue
-            if response.status_code == 429:
-                response = self._wait_out_rate_limit(payload)
-                if response is None:
-                    raise RuntimeError(
-                        f"{method}: {self.rate_limit_retries} kez {self.rate_limit_wait}s "
-                        "beklemeye rağmen 429 (rate limit)"
-                    )
-                if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES - 1:
-                    time.sleep(wait)
-                    wait = min(wait * 2, 60.0)
+            else:
+                if response.status_code == 429:
+                    if rate_retries >= self.rate_limit_retries:
+                        raise RuntimeError(f"{method}: 429 yeniden deneme bütçesi tükendi")
+                    rate_retries += 1
+                    time.sleep(self.rate_limit_wait)
                     continue
-                response.raise_for_status()
-                data = response.json()
-                if "error" in data:
-                    raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
-                return data["result"]
-            if response.status_code in {502, 503, 504} and attempt < MAX_RETRIES - 1:
-                time.sleep(wait)
-                wait = min(wait * 2, 60.0)
-                continue
-            response.raise_for_status()
-            data = response.json()
-            if "error" in data:
-                raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
-            return data["result"]
-        raise RuntimeError(f"{method}: {MAX_RETRIES} denemeden sonra RPC yanıt vermedi")
-
-    def _wait_out_rate_limit(self, payload: dict[str, Any]) -> httpx.Response | None:
-        """429 kovası soğuyana dek ``rate_limit_retries`` kez bekleyip yeniden dener.
-
-        429 dışı ilk yanıtı döndürür (çağıran normal hata yollarından geçirir);
-        kova hiç geçmezse None — çağıran kalıcı 429 RuntimeError'ını yükseltir.
-        Her deneme ``_last_call``'u tazeler: kova sonrası çağrı da pacing'e
-        uyar, kova çıkış anında seri ateşlenmez.
-        """
-        for _ in range(self.rate_limit_retries):
-            time.sleep(self.rate_limit_wait)
-            try:
-                response = self._http.post(self.url, json=payload)
-            except httpx.TransportError:
-                continue
-            finally:
-                self._last_call = time.monotonic()
-            if response.status_code != 429:
-                return response
-        return None
+                if response.status_code in {502, 503, 504}:
+                    failures += 1
+                    if failures >= MAX_RETRIES:
+                        raise RuntimeError(f"{method}: HTTP {response.status_code} yeniden deneme bütçesi tükendi")
+                else:
+                    response.raise_for_status()
+                    data = response.json()
+                    if "error" in data:
+                        raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
+                    return data["result"]
+            time.sleep(wait)
+            wait = min(wait * 2, 60.0)
 
     def get_slot(self) -> int:
         return int(self.call("getSlot", []))
@@ -176,12 +142,8 @@ class SolanaClient:
 
     def get_transaction(self, signature: str) -> dict:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir)."""
-        # Sürüm 1 işlemler mainnet'te dolaşımda (4096 bayt limit + mesaj-içi
-        # kaynak limitleri; arama tabloları v0'a özgüdür). 0 ile istenirse RPC
-        # -32015 döndürüp tüm aşama çöker (canlı BONK koşumunda görüldü);
-        # resmî belge 0'ın v1'de, boş değerin v0'da patladığını söyler, 1 hepsini
-        # kapsar. Delta okuma pre/post bakiyelerden yapıldığı için sürümden
-        # bağımsızdır.
+        # Resmî sürüm sözleşmesi: legacy/v0/v1 için en yüksek desteklenen sürüm 1.
+        # ALT v0'a özgüdür. JSON-parsed bakiye alanları ortak kullanılır.
         return self.call(
             "getTransaction",
             [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],

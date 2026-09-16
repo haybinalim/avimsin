@@ -1,12 +1,12 @@
 """RPC uçlarını hız ve doğruluk açısından karşılaştırır.
 
-Her uç için:
-- ``eth_chainId``     → hangi zincire bağlı (doğruluk kontrolü)
-- ``eth_blockNumber`` → en güncel blok + gecikme (hız kontrolü)
+Her uç için ağ kimliği ve güncel blok/slot sıralı olarak ölçülür:
+- ``solana*`` adları: ``getGenesisHash`` + ``getSlot``
+- diğer adlar (eski sağlayıcı adları dahil): ``eth_chainId`` + ``eth_blockNumber``
 
-Uçlar `.env` dosyasından okunur; istediğiniz kadar ekleyebilirsiniz
-(``RPC_<AD>=<json-rpc-url>``). Public RPC, Alchemy ve QuickNode'u aynı anda
-tanımlayıp yarıştırabilirsiniz — bazı saatlerde biri yavaşlarken diğeri hızlı kalır.
+Uçlar `.env` dosyasındaki ``RPC_<AD>=<json-rpc-url>`` ayarlarından okunur.
+Hız ve gerilik yalnız aynı protokol/ağ içinde karşılaştırılır. Bu komut
+adaptörlerin uç seçimini değiştirmez; otomatik seçim veya failover yapmaz.
 
 Kullanım::
 
@@ -22,59 +22,106 @@ import httpx
 from .config import settings
 
 
-def _rpc_call(client: httpx.Client, url: str, method: str) -> dict:
-    """Tek bir JSON-RPC çağrısı yapar ve yanıtı döndürür."""
+class RpcCheckError(RuntimeError):
+    """URL, anahtar veya sunucu mesajı içermeyen kontrol hatası."""
+
+
+def _rpc_call(client: httpx.Client, url: str, method: str) -> object:
+    """Tek çağrı yapar; yalnız güvenli yöntem/durum/kod bilgisini raporlar."""
     payload = {"jsonrpc": "2.0", "id": 1, "method": method, "params": []}
-    response = client.post(url, json=payload, timeout=15)
-    response.raise_for_status()
-    data = response.json()
+    try:
+        response = client.post(url, json=payload, timeout=15)
+    except (httpx.HTTPError, httpx.InvalidURL):
+        raise RpcCheckError(f"{method}: RPC'ye ulaşılamadı") from None
+    if not response.is_success:
+        raise RpcCheckError(f"{method}: HTTP {response.status_code}")
+    try:
+        data = response.json()
+    except ValueError:
+        raise RpcCheckError(f"{method}: geçersiz JSON yanıtı") from None
+    if not isinstance(data, dict):
+        raise RpcCheckError(f"{method}: geçersiz RPC yanıtı")
     if "error" in data:
-        raise RuntimeError(data["error"].get("message", "bilinmeyen hata"))
-    return data
+        error = data["error"]
+        code = error.get("code") if isinstance(error, dict) else None
+        suffix = f" ({code})" if type(code) is int else ""
+        raise RpcCheckError(f"{method}: RPC hatası{suffix}")
+    if "result" not in data:
+        raise RpcCheckError(f"{method}: eksik sonuç")
+    return data["result"]
 
 
-def _hex_to_int(value: str) -> int:
-    return int(value, 16)
+def _hex_to_int(value: object, method: str) -> int:
+    if isinstance(value, str) and value.startswith("0x"):
+        try:
+            number = int(value, 16)
+        except ValueError:
+            pass
+        else:
+            if number >= 0:
+                return number
+    raise RpcCheckError(f"{method}: geçersiz sayısal sonuç")
 
 
 def check_endpoint(client: httpx.Client, name: str, url: str) -> dict:
-    """Bir RPC ucunu ölçer: zincir kimliği, blok numarası ve gecikme."""
+    """Ağ kimliği, blok/slot ve iki sıralı çağrının toplam gecikmesini ölçer."""
+    protocol = "solana" if name.startswith("solana") else "evm"
+    result = {"name": name, "protocol": protocol, "network_id": None, "ok": False}
     start = time.perf_counter()
-    chain = _rpc_call(client, url, "eth_chainId")
-    block = _rpc_call(client, url, "eth_blockNumber")
+    try:
+        if protocol == "solana":
+            network = _rpc_call(client, url, "getGenesisHash")
+            if not isinstance(network, str) or not network.strip():
+                raise RpcCheckError("getGenesisHash: geçersiz ağ kimliği")
+            result["network_id"] = network
+            height = _rpc_call(client, url, "getSlot")
+            if type(height) is not int or height < 0:
+                raise RpcCheckError("getSlot: geçersiz slot")
+        else:
+            result["network_id"] = _hex_to_int(
+                _rpc_call(client, url, "eth_chainId"), "eth_chainId"
+            )
+            height = _hex_to_int(
+                _rpc_call(client, url, "eth_blockNumber"), "eth_blockNumber"
+            )
+    except RpcCheckError as exc:
+        result["error"] = str(exc)
+        return result
     elapsed_ms = (time.perf_counter() - start) * 1000
-    return {
-        "name": name,
-        "ok": True,
-        "chain_id": _hex_to_int(chain["result"]),
-        "block": _hex_to_int(block["result"]),
-        "latency_ms": round(elapsed_ms, 1),
-    }
+    result.update(ok=True, height=height, latency_ms=round(elapsed_ms, 1))
+    return result
 
 
 def _print_results(results: list[dict]) -> None:
-    ok_results = sorted((r for r in results if r["ok"]), key=lambda r: r["latency_ms"])
+    groups: dict[tuple[str, object], list[dict]] = {}
+    for result in results:
+        if result["ok"]:
+            key = (result["protocol"], result["network_id"])
+            groups.setdefault(key, []).append(result)
 
-    print(f"{'SIRA':<6}{'UÇ':<24}{'ZİNCİR':<9}{'BLOK':<14}{'GECİKME'}")
-    print("-" * 64)
-    for i, r in enumerate(ok_results, start=1):
-        print(f"{i:<6}{r['name']:<24}{r['chain_id']:<9}{r['block']:<14}{r['latency_ms']} ms")
+    for (protocol, network), members in groups.items():
+        ok_results = sorted(members, key=lambda r: r["latency_ms"])
+        unit = "slot" if protocol == "solana" else "blok"
+        identity = "genesis" if protocol == "solana" else "chain ID"
+        print(f"{protocol.upper()} — {identity}: {network}")
+        print(f"{'SIRA':<6}{'UÇ':<24}{unit.upper():<14}{'GECİKME'}")
+        print("-" * 64)
+        for i, r in enumerate(ok_results, start=1):
+            print(f"{i:<6}{r['name']:<24}{r['height']:<14}{r['latency_ms']} ms")
+        print(f"En hızlı uç: {ok_results[0]['name']} ({ok_results[0]['latency_ms']} ms)")
+
+        # Farklı protokollerin veya ağların yükseklikleri karşılaştırılamaz.
+        top_height = max(r["height"] for r in ok_results)
+        behind = [r["name"] for r in ok_results if top_height - r["height"] > 2]
+        if behind:
+            print(f"Dikkat: şu uçlar en güncel {unit}tan geride: {', '.join(behind)}")
+        print()
+
     for r in results:
         if not r["ok"]:
-            print(f"{'-':<6}{r['name']:<24}HATA: {r['error']}")
-
-    print()
-    if not ok_results:
+            print(f"{r['protocol'].upper()} {r['name']}: HATA: {r['error']}")
+    if not groups:
         print("Hiçbir uç yanıt vermedi.")
-        return
-
-    print(f"En hızlı uç: {ok_results[0]['name']} ({ok_results[0]['latency_ms']} ms)")
-
-    # Doğruluk kontrolü: geri kalmış uçları uyar.
-    top_block = max(r["block"] for r in ok_results)
-    behind = [r["name"] for r in ok_results if top_block - r["block"] > 2]
-    if behind:
-        print(f"Dikkat: şu uçlar en güncel bloktan geride: {', '.join(behind)}")
 
 
 def main() -> None:
@@ -90,8 +137,14 @@ def main() -> None:
         for name, url in endpoints.items():
             try:
                 results.append(check_endpoint(client, name, url))
-            except Exception as exc:  # noqa: BLE001
-                results.append({"name": name, "ok": False, "error": str(exc)})
+            except Exception:  # noqa: BLE001 — sonraki uç ölçülür; ham hata gizli kalır
+                results.append({
+                    "name": name,
+                    "protocol": "solana" if name.startswith("solana") else "evm",
+                    "network_id": None,
+                    "ok": False,
+                    "error": "Beklenmeyen RPC kontrol hatası",
+                })
 
     _print_results(results)
 
