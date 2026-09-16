@@ -72,7 +72,7 @@ Kod ağ-bağımsız yazılır; EVM ağları ve Solana aynı arayüzü kullanır.
 ```bash
 cd ~/Projects/avimsin
 uv sync                # Python 3.12 sanal ortamını kurar, bağımlılıkları yükler
-uv run avimsin-rpc     # RPC uçlarını hız/doğruluk açısından yarıştırır
+uv run avimsin-rpc     # RPC uçlarını sıralı ölçer; aynı ağ içinde karşılaştırır
 uv run avimsin-scan <token> --from-block <blok>   # erken alıcıları topla, SQLite'a yaz
 uv run avimsin-filter <token>   # alıcıları bot/kaçak satış kurallarından geçir
 uv run avimsin-score <token>    # temiz cüzdanları winrate/P&L/frekans ile sırala
@@ -90,12 +90,37 @@ başarılı işlemde kayıt tamamlanır. Watch bilinmeyen zincirli coinleri atla
 
 ## RPC Stratejisi
 
-Verinin en doğru kaynağı zincirin kendisidir. Katmanlı yaklaşım:
+`avimsin-rpc`, `.env` içindeki tüm `RPC_<AD>` uçlarını **sıralı** yoklar;
+paylaşılan public RPC kotası için paralel istek göndermez. `RPC_SOLANA*`
+adları Solana `getGenesisHash`/`getSlot`, diğer adlar (eski `RPC_ALCHEMY`,
+`RPC_QUICKNODE` dahil) EVM `eth_chainId`/`eth_blockNumber` ile ölçülür.
+Tablolar protokol ve ağ kimliğine (genesis hash / chain ID) göre ayrılır.
+En hızlı uç ve 2 blok/slot üzerindeki gerilik yalnız **aynı ağ içinde**
+raporlanır; ölçülen gecikme iki çağrının toplamıdır, tek seferlik bir gözlemdir.
 
-1. **Public RPC** (ücretsiz, başlangıç) →
-2. **Alchemy / QuickNode** ücretsiz API anahtarları (darboğazda devreye girer) →
-3. `avimsin-rpc` komutu tüm uçları aynı anda ölçer; **en hızlısını** kullanır.
-   Ağır saatlerde bir sağlayıcı yavaşlarsa diğerini seçebilirsiniz.
+Komut yalnız raporlar: **otomatik en-hızlı seçimi veya failover yoktur**.
+`scan/filter/score/watch` adaptörleri, ayar adları alfabetik sıralandığında
+seçilen zincirin `robinhood` veya `solana` önekiyle eşleşen **ilk** ucu kullanır.
+Eşleşme yoksa Robinhood public mainnet, Solana public devnet kullanılır.
+Örneğin `RPC_SOLANA_A_MAINNET`, `RPC_SOLANA_Z_BACKUP`'tan önce seçilir;
+ikinci uç otomatik yedek değildir. `RPC_ALCHEMY` gibi genel adlar kontrol
+komutunda ölçülür ama bu adaptörler tarafından seçilmez. Bir sağlayıcıyı
+kullanmak için doğru ağa ait URL'yi `RPC_ROBINHOOD_ALCHEMY` veya
+`RPC_SOLANA_HELIUS` gibi zincir önekli bir adla tanımlayın; seçimi değiştirmek
+için eşleşen ayarları düzenleyin. Üretimde Solana devnet yerine mainnet
+ucunu açıkça yapılandırın.
+
+Solana istemcisi normal çağrılar ve tüm retry isteklerinde aynı asgari aralığı
+uygular. 429 için 8 ek deneme; transport/502/503/504 için toplam 3 hata bütçesi
+vardır. Hata türü değişince bütçeler sıfırlanmaz. Pacing paylaşılan kotanın hiç
+dolmayacağını garanti etmez; tükenen bütçe açık hata üretir.
+
+`getTransaction` legacy/v0/v1 için `maxSupportedTransactionVersion=1` ister
+([resmî sözleşme](https://solana.com/developers/cookbook/transactions/versions)).
+`tests/fixtures/solana_v1.json`, mainnet slot 447606860'tan gerçek JSON-parsed
+yanıttır: aynı imza max=0 ile -32015, max=1 ile başarı vermiştir. Fixture testi
+token hareketini çözümler; bu, bütün Solana geçmişinin eksiksiz tarandığı veya
+gerçek ekonomik P&L hesaplandığı iddiası değildir.
 
 ## Geliştirme Akışı
 
