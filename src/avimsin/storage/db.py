@@ -2,6 +2,8 @@
 
 EVM adresleri canonical (küçük harf) saklanır; base58 (Solana) adresleri
 büyük/küçük harf duyarlı haliyle saklanır — bkz. normalize_address.
+`coins.chain` coin'in hangi ağdan tarandığını tutar (dashboard filtresi);
+eski kayıtlarda NULL kalır ve `save_coin` zinciri verildiğinde tamamlanır.
 """
 
 from __future__ import annotations
@@ -12,7 +14,8 @@ from pathlib import Path
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS coins (
     address TEXT PRIMARY KEY,
-    first_block INTEGER NOT NULL
+    first_block INTEGER NOT NULL,
+    chain TEXT
 );
 CREATE TABLE IF NOT EXISTS wallets (
     address TEXT PRIMARY KEY,
@@ -59,8 +62,10 @@ def normalize_address(address: str) -> str:
     EVM adresleri (0x önekli) büyük/küçük harf duyarsız olduğu için küçültülür;
     base58 (Solana) adresleri 0x taşıyamaz ve harf duyarlıdır — olduğu gibi
     saklanır. Zincir bilgisine gerek bırakmaz: önek yeterli ayırt edicidir.
+    Önek kontrolü harf duyarsızdır ("0X" de EVM'dir) ve bu güvenlidir: base58
+    alfabesinde '0' (sıfır) yoktur, yani base58 adres asla 0 ile başlamaz.
     """
-    return address.lower() if address.startswith("0x") else address
+    return address.lower() if address[:2].lower() == "0x" else address
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
@@ -71,15 +76,62 @@ def connect(path: str | Path) -> sqlite3.Connection:
     columns = {row[1] for row in conn.execute("PRAGMA table_info(wallets)")}
     if "verdict" not in columns:
         conn.executescript(MIGRATION)
+    # Solana desteğinden önceki veritabanları: chain kolonu sonradan eklenir.
+    coin_columns = {row[1] for row in conn.execute("PRAGMA table_info(coins)")}
+    if "chain" not in coin_columns:
+        conn.execute("ALTER TABLE coins ADD COLUMN chain TEXT")
     conn.commit()
     return conn
 
 
-def save_coin(conn: sqlite3.Connection, address: str, first_block: int) -> None:
+def save_coin(
+    conn: sqlite3.Connection, address: str, first_block: int, chain: str | None = None
+) -> None:
+    """Coin'i kaydeder; zincir verilmişse (ve kayıtta yoksa) tamamlar.
+
+    Mevcut kaydın `first_block`'u korunur — yeniden tarama ilk bloğu bozmasın.
+    """
     conn.execute(
-        "INSERT OR IGNORE INTO coins (address, first_block) VALUES (?, ?)",
-        (normalize_address(address), first_block),
+        "INSERT INTO coins (address, first_block, chain) VALUES (?, ?, ?)"
+        " ON CONFLICT(address) DO UPDATE SET chain = COALESCE(coins.chain, excluded.chain)",
+        (normalize_address(address), first_block, chain),
     )
+
+
+def set_chain(conn: sqlite3.Connection, address: str, chain: str) -> None:
+    """Zinciri yalnızca kayıtta yoksa yazar (legacy kayıtların tamamlanması)."""
+    conn.execute(
+        "UPDATE coins SET chain = ? WHERE address = ? AND chain IS NULL",
+        (chain, normalize_address(address)),
+    )
+
+
+def coin_chains(conn: sqlite3.Connection) -> dict[str, str]:
+    """address → chain eşlemesi (zinciri bilinmeyenler dahil edilmez)."""
+    return {
+        row[0]: row[1]
+        for row in conn.execute("SELECT address, chain FROM coins WHERE chain IS NOT NULL")
+    }
+
+
+def wallet_chains(conn: sqlite3.Connection) -> dict[str, str]:
+    """wallet → chain eşlemesi: cüzdanın alım yaptığı ilk coin'in zinciri.
+
+    Bir cüzdan birden çok zincirde görünebilir (aynı adres farklı ağlarda);
+    en erken bloklu kayıt kazanır ki dashboard tek satırda göstersin.
+    """
+    rows = conn.execute(
+        """
+        SELECT p.wallet, c.chain
+        FROM purchases p JOIN coins c ON c.address = p.coin
+        WHERE c.chain IS NOT NULL
+        ORDER BY p.block
+        """
+    ).fetchall()
+    out: dict[str, str] = {}
+    for wallet, chain in rows:
+        out.setdefault(wallet, chain)
+    return out
 
 
 def save_purchase(conn: sqlite3.Connection, coin: str, wallet: str, block: int, tx: str) -> None:

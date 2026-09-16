@@ -14,7 +14,7 @@ from .chains.protocol import ChainClient
 from .filters.base import WalletHistory
 from .scoring.engine import rank, score_wallet
 from .storage.db import connect as db_connect
-from .storage.db import normalize_address, save_score
+from .storage.db import normalize_address, save_score, set_chain
 
 
 def main() -> None:
@@ -50,6 +50,7 @@ def main() -> None:
             from_block = row[0]
         else:
             from_block = args.from_block
+        set_chain(conn, coin, args.chain)
 
         wallets = [
             r[0]

@@ -54,6 +54,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },
+    { name = "pandas" },
     { name = "python-dotenv" },
     { name = "streamlit" },
 ]
@@ -66,6 +67,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
+    { name = "pandas", specifier = ">=2.0" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "streamlit", specifier = ">=1.40" },
 ]
