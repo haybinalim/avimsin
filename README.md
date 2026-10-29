@@ -1,5 +1,7 @@
 # Avımsın (avimsin) 🏹
 
+> **EN:** Avımsın finds the wallets that bought a coin early, filters out bots and panic sellers, ranks the remaining smart-money wallets by performance and sends a Telegram alert when they buy together above your threshold. Python · on-chain analytics.
+
 **Smart wallet bulucu ve takipçi.** Bir coin'i erken alan cüzdanları bulur, bot
 cüzdanlarını ve kağıt-elyaf (panik satan) cüzdanları eler, kalan **smart wallet**
 listesini performansa göre sıralar ve belirlediğiniz eşikte toplu alım olduğunda
@@ -133,3 +135,7 @@ git push -u origin feat/yeni-ozellik
 gh pr create                      # Pull Request aç
 gh pr merge --squash --delete-branch
 ```
+
+## Lisans / License
+
+[MIT](LICENSE) © haybinalim
