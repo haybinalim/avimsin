@@ -77,7 +77,7 @@ def detect_signals(
 def format_signal(signal: Signal, threshold: int) -> str:
     """Sinyali Telegram mesajına çevirir."""
     lines = [
-        f"🏹 <b>Avımsın sinyali</b>",
+        "🏹 <b>Avımsın sinyali</b>",
         f"Coin: <code>{signal.coin}</code>",
         f"{len(signal.wallets)}/{threshold} smart wallet'a token girişi:",
         "Transfer tabanlı gösterge; doğrulanmış swap/alım değildir.",

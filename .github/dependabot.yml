@@ -1,0 +1,25 @@
+version: 2
+updates:
+  - package-ecosystem: 'uv'
+    directory: '/'
+    schedule:
+      interval: 'weekly'
+      day: 'monday'
+      time: '09:00'
+      timezone: 'Europe/Istanbul'
+    open-pull-requests-limit: 5
+    groups:
+      minor-patch:
+        update-types:
+          - 'minor'
+          - 'patch'
+    labels:
+      - 'dependencies'
+
+  - package-ecosystem: 'github-actions'
+    directory: '/'
+    schedule:
+      interval: 'monthly'
+    labels:
+      - 'dependencies'
+      - 'ci'

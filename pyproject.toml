@@ -29,3 +29,7 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/avimsin"]
+
+[tool.ruff.lint]
+# Errors only (pyflakes + syntax/runtime pycodestyle checks); style is not enforced.
+select = ["E4", "E7", "E9", "F"]

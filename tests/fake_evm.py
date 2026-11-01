@@ -12,7 +12,6 @@ import json
 import httpx
 
 from avimsin.chains.base import TRANSFER_TOPIC
-from avimsin.collectors.transfers import ZERO_ADDRESS
 
 CHAIN_ID = 4663
 
