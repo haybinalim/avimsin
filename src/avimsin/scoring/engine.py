@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..collectors.transfers import ZERO_ADDRESS, TransferEvent
+from ..collectors.transfers import ZERO_ADDRESS
 from ..filters.base import WalletHistory
 
 
