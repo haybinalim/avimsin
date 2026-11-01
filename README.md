@@ -9,6 +9,21 @@ Telegram'dan haber verir.
 
 > Repo adı `avimsin` — GitHub Türkçe karakter desteklemediği için; proje adı **Avımsın**.
 
+## Ekran Görüntüleri / Screenshots
+
+> Görüntüler **sahte demo verisiyle** alınmıştır: testlerdeki sahte EVM zinciri
+> (`tests/fake_evm.py`) üzerinde gerçek `scan → filter → score` CLI'ları çalıştırıldı;
+> adresler ve miktarlar uydurmadır, gerçek cüzdan veya RPC verisi değildir.
+> *EN: Captured with fake demo data (the test suite's fake EVM chain) — not real wallets.*
+
+**Streamlit paneli** — cüzdan durumu (temiz / bot / kaçak satış) ve smart wallet sıralaması:
+
+![Avımsın Streamlit paneli: 12 temiz, 5 bot, 3 kaçak satış cüzdanı ve skor, winrate, net akış sütunlarıyla smart wallet sıralama tablosu](docs/screenshots/dashboard.png)
+
+**CLI** — `avimsin-filter` özeti ve `avimsin-score` sıralama tablosu:
+
+![Terminalde avimsin-filter özeti (20 cüzdan: 12 temiz, 5 bot, 3 hızlı çıkış) ve avimsin-score ile skorlanmış 10 cüzdanın sıralama tablosu](docs/screenshots/cli-filter-score.png)
+
 ## Mevcut doğruluk sınırı
 
 Bu sürüm transfer tabanlı bir göstergedir: token girişi doğrulanmış satın alma,
