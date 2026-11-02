@@ -1,5 +1,10 @@
 # Avımsın (avimsin) 🏹
 
+[![CI](https://github.com/haybinalim/avimsin/actions/workflows/ci.yml/badge.svg)](https://github.com/haybinalim/avimsin/actions/workflows/ci.yml)
+[![Python 3.12+](https://img.shields.io/badge/python-3.12%2B-blue.svg)](pyproject.toml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 > **EN:** Avımsın finds the wallets that bought a coin early, filters out bots and panic sellers, ranks the remaining smart-money wallets by performance and sends a Telegram alert when they buy together above your threshold. Python · on-chain analytics.
 
 **Smart wallet bulucu ve takipçi.** Bir coin'i erken alan cüzdanları bulur, bot
