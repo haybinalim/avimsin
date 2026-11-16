@@ -125,6 +125,8 @@ def test_watch_queries_only_selected_chain_and_uses_its_smart_wallets(chain) -> 
             save_verdict(conn, wallets[coin_chain], "ok", "none", "geçti")
         conn.commit()
         for threshold, expected in [(2, 0), (1, 1)]:
+            for table in ("watch_cursor", "watch_inflows", "watch_alerts"):
+                conn.execute(f"DELETE FROM {table}")  # her senaryo temiz durumdan başlar
             client = Client()
             assert watch_loop(client, conn, once=True, threshold=threshold, chain=chain) == expected
             assert client.queried == [coins[chain]]
