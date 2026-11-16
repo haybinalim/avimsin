@@ -54,6 +54,10 @@ Aynı küme tekrar bildirilmez; yeni cüzdan katılırsa "güncelleme" gider; il
 düşürmez: log satırı yazılır, sinyal sonraki turda yeniden denenir. Sınırlar: gönderim
 sinyal penceresinden uzun süre başarısız kalırsa sinyal düşer; bu tablolar ayrık olarak
 zincire göre tutulur, transferler yine doğrulanmış alım değildir.
+RPC hatası (retry bütçesi bitince) döngüyü düşürmez: log satırına yalnız sınıf adı/durum
+kodu yazılır (URL/anahtar yok), tur hepsi-ya-hiç iptal edilir (cursor ilerlemez, hiçbir giriş
+yazılmaz), bekleyen sinyaller yine gönderilir. `--once` modunda RPC hatası çıkış kodu 1 verir.
+Açılışta ilk `block_number` hatası süreci düşürür (systemd yeniden başlatır).
 
 ## Vizyon
 
