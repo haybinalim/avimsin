@@ -26,6 +26,10 @@ class Settings:
     # Solana ~2.5 slot/sn üretir; servis durup yeniden başlarsa biriken aralık
     # imza sayfalama şişmesine yol açar — sınır aşılırsa tur atlanır, güncele geçilir.
     watch_max_slots_per_poll: int | None = None
+    # Eşik, bu süre içindeki farklı cüzdan sayısıyla değerlendirilir (saniye).
+    watch_signal_window_seconds: int = 3600
+    # Bildirimden sonra aynı coin için bu süre yalnız yeni cüzdanlar güncelleme getirir.
+    watch_alert_cooldown_seconds: int = 86400
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -44,6 +48,12 @@ class Settings:
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),
             watch_poll_seconds=int(os.environ.get("WATCH_POLL_SECONDS", "30")),
             watch_max_slots_per_poll=int(max_slots) if max_slots else None,
+            watch_signal_window_seconds=int(
+                os.environ.get("WATCH_SIGNAL_WINDOW_SECONDS", "3600")
+            ),
+            watch_alert_cooldown_seconds=int(
+                os.environ.get("WATCH_ALERT_COOLDOWN_SECONDS", "86400")
+            ),
         )
 
 

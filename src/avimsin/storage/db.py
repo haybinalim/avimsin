@@ -41,6 +41,27 @@ CREATE TABLE IF NOT EXISTS scores (
     frequency REAL NOT NULL,
     score REAL NOT NULL
 );
+-- watch güvenilirliği (salt-eklemeli): kalıcı cursor, pencere girişleri, bildirim kaydı.
+CREATE TABLE IF NOT EXISTS watch_cursor (
+    chain TEXT PRIMARY KEY,
+    last_block INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS watch_inflows (
+    chain TEXT NOT NULL,
+    coin TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    first_block INTEGER NOT NULL,
+    last_block INTEGER NOT NULL,
+    PRIMARY KEY (chain, coin, wallet)
+);
+CREATE TABLE IF NOT EXISTS watch_alerts (
+    chain TEXT NOT NULL,
+    coin TEXT NOT NULL,
+    first_sent_block INTEGER NOT NULL,
+    last_sent_block INTEGER NOT NULL,
+    wallets TEXT NOT NULL,
+    PRIMARY KEY (chain, coin)
+);
 """
 
 # Faz 2'den önce oluşturulan veritabanlarına verdict kolonlarını ekler.

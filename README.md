@@ -44,8 +44,16 @@ Boş filtre geçmişi temiz sayılmaz. CLI token birimi gösterir; DB'deki net a
 tam tokene yuvarlanır, panel hassasiyeti bu aşamada düzeltilmiş değildir.
 
 `watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Mint/burn,
-sıfır/negatif ve öz-transferler sayılmaz. Sinyal hâlâ tek poll penceresindedir;
-kalıcı cursor, teslimat kuyruğu ve tekrar bildirimi engeli henüz yoktur.
+sıfır/negatif ve öz-transferler sayılmaz. Cursor kalıcıdır (`watch_cursor`):
+yeniden başlatmada kesinti taranır; `WATCH_MAX_SLOTS_PER_POLL` aşılırsa aralık
+atlanır (log satırı) ve cursor güncele çekilir. Eşik, son
+`WATCH_SIGNAL_WINDOW_SECONDS` (varsayılan 3600) içindeki farklı cüzdan sayısıyla
+turlar arası birikerek değerlendirilir; süre blok sayısına zincir aralığıyla çevrilir.
+Aynı küme tekrar bildirilmez; yeni cüzdan katılırsa "güncelleme" gider; ilk tam sinyalden
+`WATCH_ALERT_COOLDOWN_SECONDS` (86400) sonra coin sıfırlanır (güncellemeler süreyi uzatmaz). Telegram hatası döngüyü
+düşürmez: log satırı yazılır, sinyal sonraki turda yeniden denenir. Sınırlar: gönderim
+sinyal penceresinden uzun süre başarısız kalırsa sinyal düşer; bu tablolar ayrık olarak
+zincire göre tutulur, transferler yine doğrulanmış alım değildir.
 
 ## Vizyon
 
