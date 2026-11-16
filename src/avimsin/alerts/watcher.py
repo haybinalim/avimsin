@@ -217,6 +217,10 @@ def _describe_error(exc: Exception) -> str:
     return type(exc).__name__
 
 
+class WatchRpcError(RuntimeError):
+    """once=True turunda RPC hatası; mesaj ve zincir bağlamı URL/anahtar taşımaz."""
+
+
 def watch_loop(
     client: ChainClient,
     conn: sqlite3.Connection,
@@ -245,6 +249,12 @@ def watch_loop(
     Girişler at-least-once işlenir ve idempotent yazılır (aynı aralık yeniden
     taransa da kayıt çoğalmaz). Cooldown ilk TAM sinyalden sayılır; güncellemeler
     süreyi uzatmaz.
+    RPC hatası (block_number ya da token_transfers; retry bütçesi bitince): tur
+    hepsi-ya-hiç iptal edilir, kalıcı olmayan girişler geri alınır, cursor ilerlemez,
+    log satırına yalnız sınıf adı/durum kodu yazılır (URL/anahtar yok). Bekleyen
+    sinyaller yine gönderilir (block_number hatasında ``now`` son cursor'dır).
+    Daemon modunda döngü sürer; ``once=True`` ise sinyaller gönderildikten sonra
+    ``WatchRpcError`` fırlatılır (CLI sıfır olmayan çıkış kodu verir).
     """
     chain = normalize_chain(chain)
     threshold = threshold if threshold is not None else settings.smart_wallet_signal_threshold
@@ -267,44 +277,62 @@ def watch_loop(
     else:
         print(f"Cursor'dan devam: {chain} blok {last_block}.")
 
+    rpc_failures = 0
     while True:
-        latest = client.block_number()
-        if latest < last_block:
-            print(f"UYARI: {chain} güncel blok {latest} < cursor {last_block}; tarama yok.")
-        if latest > last_block:
-            if max_slots_per_poll is not None and latest - last_block > max_slots_per_poll:
+        rpc_error: Exception | None = None
+        latest = last_block  # block_number düşerse son bilinen cursor
+        try:
+            latest = client.block_number()
+            if latest < last_block:
+                print(f"UYARI: {chain} güncel blok {latest} < cursor {last_block}; tarama yok.")
+            if latest > last_block:
+                if max_slots_per_poll is not None and latest - last_block > max_slots_per_poll:
+                    print(
+                        f"ATLANDI: {latest - last_block} aralık > {max_slots_per_poll} sınır;"
+                        f" {last_block + 1}–{latest} taranmadı, güncele geçildi."
+                    )
+                else:
+                    # Yalnız açıkça seçilen zincirin coin'lerini sorgula.
+                    coins = [
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT address FROM coins WHERE chain = ?", (chain,)
+                        ).fetchall()
+                    ]
+                    smart_wallets = {
+                        r[0]
+                        for r in conn.execute(
+                            "SELECT DISTINCT p.wallet FROM purchases p"
+                            " JOIN coins c ON c.address = p.coin"
+                            " JOIN wallets w ON w.address = p.wallet"
+                            " WHERE c.chain = ? AND w.verdict = 'ok'",
+                            (chain,),
+                        ).fetchall()
+                    }
+                    events: list[TransferEvent] = []
+                    for coin in coins:
+                        events.extend(client.token_transfers(coin, last_block + 1, latest))
+                    # İstemciden gelen olaylar da seçili coin ve cüzdan bağlamında kalır.
+                    watched_coins = set(coins)
+                    events = [e for e in events if e.token in watched_coins]
+                    _record_inflows(conn, chain, inflows_by_coin(conn, events, smart_wallets))
+                    conn.commit()  # girişler kalıcı; cursor ilerleyebilir
+                last_block = latest
+                _save_cursor(conn, chain, last_block)
+        except Exception as exc:  # RPC hatası: hepsi-ya-hiç, cursor ilerlemez
+            conn.rollback()  # kısmi girişler yazılmasın
+            rpc_error = exc
+            latest = last_block
+            rpc_failures += 1
+            # URL/anahtar sızmasın: yalnız sınıf adı (HTTP ise durum kodu).
+            if rpc_failures <= 3 or rpc_failures % 20 == 0:
                 print(
-                    f"ATLANDI: {latest - last_block} aralık > {max_slots_per_poll} sınır;"
-                    f" {last_block + 1}–{latest} taranmadı, güncele geçildi."
+                    f"HATA: {chain} RPC turu başarısız ({_describe_error(exc)});"
+                    f" cursor {last_block}'da kaldı, aynı aralık yeniden taranacak"
+                    f" (ardışık hata: {rpc_failures})."
                 )
-            else:
-                # Yalnız açıkça seçilen zincirin coin'lerini sorgula.
-                coins = [
-                    r[0]
-                    for r in conn.execute(
-                        "SELECT address FROM coins WHERE chain = ?", (chain,)
-                    ).fetchall()
-                ]
-                smart_wallets = {
-                    r[0]
-                    for r in conn.execute(
-                        "SELECT DISTINCT p.wallet FROM purchases p"
-                        " JOIN coins c ON c.address = p.coin"
-                        " JOIN wallets w ON w.address = p.wallet"
-                        " WHERE c.chain = ? AND w.verdict = 'ok'",
-                        (chain,),
-                    ).fetchall()
-                }
-                events: list[TransferEvent] = []
-                for coin in coins:
-                    events.extend(client.token_transfers(coin, last_block + 1, latest))
-                # İstemciden gelen olaylar da seçili coin ve cüzdan bağlamında kalır.
-                watched_coins = set(coins)
-                events = [e for e in events if e.token in watched_coins]
-                _record_inflows(conn, chain, inflows_by_coin(conn, events, smart_wallets))
-                conn.commit()  # girişler kalıcı; cursor ilerleyebilir
-            last_block = latest
-            _save_cursor(conn, chain, last_block)
+        else:
+            rpc_failures = 0
 
         now = max(latest, last_block)
         for signal in _pending_signals(conn, chain, now, threshold, window_blocks, cooldown_blocks):
@@ -323,5 +351,7 @@ def watch_loop(
             print(f"{kind}: {signal.coin} — {len(signal.wallets)} smart wallet")
             sent += 1
         if once:
+            if rpc_error is not None:
+                raise WatchRpcError(f"{chain} RPC turu başarısız") from None
             return sent
         time.sleep(poll_seconds)

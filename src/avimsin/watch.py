@@ -8,9 +8,10 @@ Kullanım::
 from __future__ import annotations
 
 import argparse
+import sys
 
 from .alerts.telegram import TelegramClient
-from .alerts.watcher import watch_loop
+from .alerts.watcher import WatchRpcError, watch_loop
 from .chains import open_chain
 from .config import settings
 from .storage.db import connect as db_connect
@@ -47,6 +48,9 @@ def main() -> None:
                     " Ctrl+C ile durdurun."
                 )
                 watch_loop(client, conn, client, telegram=telegram, chain=args.chain)
+    except WatchRpcError as exc:
+        print(f"HATA: {exc}; çıkış kodu 1.", file=sys.stderr)
+        sys.exit(1)
     except KeyboardInterrupt:
         print("\nİzleme durduruldu.")
     finally:
