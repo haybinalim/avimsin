@@ -159,7 +159,7 @@ def test_same_cluster_silent_new_wallet_updates_cooldown_resets() -> None:
     chain.inflows.append((1250, C1, W[3]))
     chain.head = 1300
     assert run(chain, conn, tg) == 1
-    assert "güncelleme" in tg.sent[1] and f"{W[3]}</code> (blok 1250) YENİ" in tg.sent[1]
+    assert "güncelleme" in tg.sent[1] and f"{W[3]}</code> (ilk giriş bloğu 1250) YENİ" in tg.sent[1]
     assert "YENİ" not in tg.sent[1].split(W[0])[1].split("\n")[0]
     # Güncellemeden sonra aynı küme yine sessiz.
     chain.head = 1350
@@ -237,3 +237,40 @@ def test_without_telegram_prints_only_and_does_not_repeat(capsys) -> None:
 def test_window_and_cooldown_use_chain_block_interval() -> None:
     assert watcher._blocks_for(3600, "robinhood") == 14400
     assert watcher._blocks_for(3600, "solana") == 9000
+
+
+def test_restart_between_rounds_scans_only_new_blocks() -> None:
+    conn = make_db()
+    chain, tg = Chain(1000), FakeTelegram()
+    run(chain, conn, tg)
+    chain.inflows = [(1010, C1, W[0])]
+    chain.head = 1100
+    run(chain, conn, tg)  # tur 1: 1001-1100 işlenir, cursor 1100'e ilerler
+    assert conn.execute("SELECT last_block FROM watch_cursor").fetchone()[0] == 1100
+    # Süreç kapalıyken iki giriş daha oldu; yeniden başlatma.
+    chain.inflows += [(1120, C1, W[1]), (1130, C1, W[2])]
+    chain.head = 1200
+    chain.ranges.clear()
+    assert run(chain, conn, tg) == 1
+    assert chain.ranges == [(1101, 1200)]  # yalnız yeni bloklar
+    assert len(tg.sent) == 1
+
+
+def test_cooldown_counts_from_first_full_signal_not_updates() -> None:
+    conn = make_db()
+    chain, tg = Chain(1000), FakeTelegram()
+    run(chain, conn, tg)
+    chain.inflows = [(1010, C1, W[0]), (1020, C1, W[1]), (1030, C1, W[2])]
+    chain.head = 1100
+    assert run(chain, conn, tg) == 1  # tam sinyal @1100; cooldown 4000 blok -> 5100
+    # Sürekli yeni cüzdan: güncellemeler süreyi uzatmamalı.
+    chain.inflows += [(3000, C1, W[0]), (3001, C1, W[1]), (3002, C1, W[3])]
+    chain.head = 3010
+    assert run(chain, conn, tg) == 1 and "güncelleme" in tg.sent[1]
+    chain.inflows += [(5000, C1, W[0]), (5001, C1, W[1]), (5002, C1, W[4])]
+    chain.head = 5050
+    assert run(chain, conn, tg) == 1 and "güncelleme" in tg.sent[2]
+    # 5100 geçti: pencerede 3 cüzdan var, coin sıfırlandı -> TAM sinyal.
+    chain.head = 5200
+    assert run(chain, conn, tg) == 1
+    assert "güncelleme" not in tg.sent[3]

@@ -92,8 +92,8 @@ def test_signal_pairs_sorted_wallets_with_their_earliest_blocks() -> None:
         assert signal.wallets == [W2, W3]
         assert signal.blocks == [115, 105]
         message = format_signal(signal, threshold=2)
-        assert f"<code>{W2}</code> (blok 115)" in message
-        assert f"<code>{W3}</code> (blok 105)" in message
+        assert f"<code>{W2}</code> (ilk giriş bloğu 115)" in message
+        assert f"<code>{W3}</code> (ilk giriş bloğu 105)" in message
         assert detect_signals(conn, events, threshold=3) == []
     finally:
         conn.close()

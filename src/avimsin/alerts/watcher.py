@@ -8,7 +8,7 @@ Dayanıklılık (SQLite, zincir anahtarlı):
 - ``watch_cursor``: son işlenen blok; yeniden başlatmada kesinti taranır.
 - ``watch_inflows``: pencere içindeki girişler (turlar arası birikim).
 - ``watch_alerts``: bildirilen cüzdanlar. Aynı küme tekrar gönderilmez; yeni cüzdan
-  katılırsa "güncelleme" gider; ``WATCH_ALERT_COOLDOWN_SECONDS`` sonra coin sıfırlanır.
+  katılırsa "güncelleme" gider; ilk tam sinyalden ``WATCH_ALERT_COOLDOWN_SECONDS`` sonra coin sıfırlanır.
 Teslimat durumdan türetilir: gönderim hatası alert kaydı yazılmadan kalır, sonraki
 tur aynı sinyali yeniden dener (pencere dışına düşerse kaybolur — bilinen sınır).
 """
@@ -106,7 +106,7 @@ def format_signal(signal: Signal, threshold: int) -> str:
     ]
     for w, b in zip(signal.wallets, signal.blocks):
         mark = " YENİ" if update and w in (signal.new_wallets or []) else ""
-        lines.append(f"  • <code>{w}</code> (blok {b}){mark}")
+        lines.append(f"  • <code>{w}</code> (ilk giriş bloğu {b}){mark}")
     return "\n".join(lines)
 
 
@@ -160,7 +160,7 @@ def _pending_signals(
         (chain, latest - window_blocks),
     )
     conn.execute(
-        "DELETE FROM watch_alerts WHERE chain = ? AND last_sent_block <= ?",
+        "DELETE FROM watch_alerts WHERE chain = ? AND first_sent_block <= ?",
         (chain, latest - cooldown_blocks),
     )
     conn.commit()
@@ -201,10 +201,11 @@ def _mark_alerted(conn: sqlite3.Connection, chain: str, signal: Signal, latest: 
     known = set(json.loads(row[0])) if row else set()
     merged = sorted(known | set(signal.wallets))
     conn.execute(
-        "INSERT INTO watch_alerts (chain, coin, last_sent_block, wallets) VALUES (?, ?, ?, ?)"
+        "INSERT INTO watch_alerts (chain, coin, first_sent_block, last_sent_block, wallets)"
+        " VALUES (?, ?, ?, ?, ?)"
         " ON CONFLICT(chain, coin) DO UPDATE SET"
         " last_sent_block = excluded.last_sent_block, wallets = excluded.wallets",
-        (chain, signal.coin, latest, json.dumps(merged)),
+        (chain, signal.coin, latest, latest, json.dumps(merged)),
     )
     conn.commit()
 
@@ -241,6 +242,9 @@ def watch_loop(
     Cursor ``watch_cursor``'da kalıcıdır; yoksa en son bloktan başlanır.
     Telegram hatası döngüyü düşürmez: log satırı yazılır, bildirim kaydı
     işlenmez ve sinyal sonraki turda yeniden denenir (çift gönderim yok).
+    Girişler at-least-once işlenir ve idempotent yazılır (aynı aralık yeniden
+    taransa da kayıt çoğalmaz). Cooldown ilk TAM sinyalden sayılır; güncellemeler
+    süreyi uzatmaz.
     """
     chain = normalize_chain(chain)
     threshold = threshold if threshold is not None else settings.smart_wallet_signal_threshold

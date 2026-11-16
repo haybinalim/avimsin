@@ -49,8 +49,8 @@ yeniden başlatmada kesinti taranır; `WATCH_MAX_SLOTS_PER_POLL` aşılırsa ara
 atlanır (log satırı) ve cursor güncele çekilir. Eşik, son
 `WATCH_SIGNAL_WINDOW_SECONDS` (varsayılan 3600) içindeki farklı cüzdan sayısıyla
 turlar arası birikerek değerlendirilir; süre blok sayısına zincir aralığıyla çevrilir.
-Aynı küme tekrar bildirilmez; yeni cüzdan katılırsa "güncelleme" gider; son bildirimden
-`WATCH_ALERT_COOLDOWN_SECONDS` (86400) sonra coin sıfırlanır. Telegram hatası döngüyü
+Aynı küme tekrar bildirilmez; yeni cüzdan katılırsa "güncelleme" gider; ilk tam sinyalden
+`WATCH_ALERT_COOLDOWN_SECONDS` (86400) sonra coin sıfırlanır (güncellemeler süreyi uzatmaz). Telegram hatası döngüyü
 düşürmez: log satırı yazılır, sinyal sonraki turda yeniden denenir. Sınırlar: gönderim
 sinyal penceresinden uzun süre başarısız kalırsa sinyal düşer; bu tablolar ayrık olarak
 zincire göre tutulur, transferler yine doğrulanmış alım değildir.

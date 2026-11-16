@@ -57,6 +57,7 @@ CREATE TABLE IF NOT EXISTS watch_inflows (
 CREATE TABLE IF NOT EXISTS watch_alerts (
     chain TEXT NOT NULL,
     coin TEXT NOT NULL,
+    first_sent_block INTEGER NOT NULL,
     last_sent_block INTEGER NOT NULL,
     wallets TEXT NOT NULL,
     PRIMARY KEY (chain, coin)
