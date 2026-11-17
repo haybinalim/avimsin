@@ -120,6 +120,24 @@ def test_complete_window_never_drifts(tmp_path, monkeypatch):
         assert client.calls == [fixed[:2]]
 
 
+def test_complete_window_survives_setting_change(tmp_path, monkeypatch):
+    """Hedef yeniden hesaplansaydı ayar değişince pencere kayardı; tam pencere sabit kalmalı."""
+    from dataclasses import replace
+
+    from avimsin import window as window_mod
+
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    run(monkeypatch, filter_cli, path, "solana", Client(FIRST + DAY["solana"] + 1))
+    monkeypatch.setattr(
+        window_mod, "settings", replace(window_mod.settings, analysis_window_seconds=3600)
+    )
+    client = Client(FIRST + DAY["solana"] * 3)
+    run(monkeypatch, filter_cli, path, "solana", client)
+    assert client.calls == [(FIRST, FIRST + DAY["solana"])]
+    assert window(path, "solana") == (FIRST, FIRST + DAY["solana"], True)
+
+
 def test_score_uses_window_saved_by_filter(tmp_path, monkeypatch):
     path = tmp_path / "a.sqlite"
     seed(path, "solana")
