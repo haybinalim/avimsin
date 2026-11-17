@@ -2,6 +2,8 @@
 
 EVM adresleri canonical (küçük harf) saklanır; base58 (Solana) adresleri
 büyük/küçük harf duyarlı haliyle saklanır — bkz. normalize_address.
+Karar ve skor coin bazlıdır (coin_verdicts, coin_scores); eski wallets.verdict*
+kolonları ve scores tablosu geriye dönük durur ama artık yazılmaz/okunmaz.
 `coins.chain` coin'in hangi ağdan tarandığını tutar (dashboard filtresi);
 eski kayıtlarda NULL kalır ve `save_coin` zinciri verildiğinde tamamlanır.
 """
@@ -40,6 +42,26 @@ CREATE TABLE IF NOT EXISTS scores (
     trades INTEGER NOT NULL,
     frequency REAL NOT NULL,
     score REAL NOT NULL
+);
+-- Coin bazlı sonuçlar (salt-eklemeli): karar ve skor (coin, cüzdan) çiftine aittir.
+-- Eski wallets.verdict* kolonları ve scores tablosu donmuştur: yeni kod yazmaz/okumaz.
+CREATE TABLE IF NOT EXISTS coin_verdicts (
+    coin TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    verdict TEXT,
+    rule TEXT,
+    reason TEXT,
+    PRIMARY KEY (coin, wallet)
+);
+CREATE TABLE IF NOT EXISTS coin_scores (
+    coin TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    winrate REAL NOT NULL,
+    net_pnl INTEGER NOT NULL,
+    trades INTEGER NOT NULL,
+    frequency REAL NOT NULL,
+    score REAL NOT NULL,
+    PRIMARY KEY (coin, wallet)
 );
 -- watch güvenilirliği (salt-eklemeli): kalıcı cursor, pencere girişleri, bildirim kaydı.
 CREATE TABLE IF NOT EXISTS watch_cursor (
@@ -183,16 +205,37 @@ def save_purchase(conn: sqlite3.Connection, coin: str, wallet: str, block: int, 
     )
 
 
+LEGACY_NOTE = (
+    "NOT: coin bazlı kayıt (coin_verdicts/coin_scores) yok. Eski global karar/skor kayıtlarının "
+    "coin bilgisi yoktur ve okunmaz; avimsin-filter ve avimsin-score'u coin bazında yeniden çalıştırın."
+)
+
+
+def has_coin_results(conn: sqlite3.Connection) -> bool:
+    """coin_verdicts ya da coin_scores'ta herhangi bir kayıt var mı (yeni tablolar boş mu?)."""
+    return any(
+        conn.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone() is not None
+        for table in ("coin_verdicts", "coin_scores")
+    )
+
+
 def save_verdict(
-    conn: sqlite3.Connection, wallet: str, verdict: str | None, rule: str, reason: str
+    conn: sqlite3.Connection, coin: str, wallet: str, verdict: str | None, rule: str, reason: str
 ) -> None:
-    """Filtre sonucunu işler; uygun olmayan cüzdanın global skorunu geçersiz kılar."""
+    """Filtre sonucunu (coin, cüzdan) için yazar; uygun olmayan karar yalnız o coin'in skorunu siler."""
+    coin, wallet = normalize_address(coin), normalize_address(wallet)
     conn.execute(
-        "UPDATE wallets SET verdict = ?, verdict_rule = ?, verdict_reason = ? WHERE address = ?",
-        (verdict, rule, reason, normalize_address(wallet)),
+        "INSERT OR REPLACE INTO coin_verdicts (coin, wallet, verdict, rule, reason)"
+        " VALUES (?, ?, ?, ?, ?)",
+        (coin, wallet, verdict, rule, reason),
     )
     if verdict != VERDICT_OK:
-        conn.execute("DELETE FROM scores WHERE wallet = ?", (normalize_address(wallet),))
+        conn.execute("DELETE FROM coin_scores WHERE coin = ? AND wallet = ?", (coin, wallet))
+
+
+def clear_coin_scores(conn: sqlite3.Connection, coin: str) -> None:
+    """Yalnız verilen coin'in skor satırlarını siler (yeniden yazmadan önce)."""
+    conn.execute("DELETE FROM coin_scores WHERE coin = ?", (normalize_address(coin),))
 
 
 TOKEN_UNIT = 10**18  # Varsayılan token birimi; net akış finansal P&L değildir.
@@ -200,6 +243,7 @@ TOKEN_UNIT = 10**18  # Varsayılan token birimi; net akış finansal P&L değild
 
 def save_score(
     conn: sqlite3.Connection,
+    coin: str,
     wallet: str,
     winrate: float,
     net_pnl: int,
@@ -208,7 +252,7 @@ def save_score(
     score: float,
     token_unit: int = TOKEN_UNIT,
 ) -> None:
-    """Skor tablosuna yazar veya günceller.
+    """coin_scores'a (coin, cüzdan) için yazar veya günceller.
 
     ``net_pnl`` eski kolon adıdır: çıkış eksi giriş token akış proxy'si,
     finansal P&L değil. Ham birim ``token_unit`` ile tam tokena çevrilir;
@@ -217,7 +261,8 @@ def save_score(
     """
     pnl_in_tokens = net_pnl // token_unit
     conn.execute(
-        "INSERT OR REPLACE INTO scores (wallet, winrate, net_pnl, trades, frequency, score)"
-        " VALUES (?, ?, ?, ?, ?, ?)",
-        (normalize_address(wallet), winrate, pnl_in_tokens, trades, frequency, score),
+        "INSERT OR REPLACE INTO coin_scores"
+        " (coin, wallet, winrate, net_pnl, trades, frequency, score)"
+        " VALUES (?, ?, ?, ?, ?, ?, ?)",
+        (normalize_address(coin), normalize_address(wallet), winrate, pnl_in_tokens, trades, frequency, score),
     )

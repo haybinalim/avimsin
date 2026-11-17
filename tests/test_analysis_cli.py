@@ -47,18 +47,22 @@ def seed(path, chain="robinhood"):
         save_coin(conn, COIN, 1, chain)
         for wallet, verdict in [(CLEAN, "ok"), (BOT, "bot"), (DUMP, "dump"), (UNKNOWN, None)]:
             save_purchase(conn, COIN, wallet, 1, wallet)
-            save_verdict(conn, wallet, verdict, "-", "seed")
-            save_score(conn, wallet, 0.0, -1000000, 1, 0.0, 0.1, 1000000)
+            save_verdict(conn, COIN, wallet, verdict, "-", "seed")
+            save_score(conn, COIN, wallet, 0.0, -1000000, 1, 0.0, 0.1, 1000000)
         save_coin(conn, OTHER_COIN, 1, "robinhood")
         save_purchase(conn, OTHER_COIN, OUTSIDE, 1, "outside")
-        save_verdict(conn, OUTSIDE, "ok", "-", "seed")
-        save_score(conn, OUTSIDE, 1.0, 1000000, 2, 0.1, 0.9, 1000000)
+        save_verdict(conn, OTHER_COIN, OUTSIDE, "ok", "-", "seed")
+        save_score(conn, OTHER_COIN, OUTSIDE, 1.0, 1000000, 2, 0.1, 0.9, 1000000)
     conn.close()
 
 
 def rows(path, table):
     with sqlite3.connect(path) as conn:
         return conn.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()
+
+
+def score_wallets(path):
+    return [row[1] for row in rows(path, "coin_scores")]
 
 
 def invoke(monkeypatch, module, path, *args):
@@ -80,7 +84,7 @@ def transfers(wallet=CLEAN):
 def test_chain_mismatch_rejected_before_rpc_or_results(tmp_path, monkeypatch, module, explicit_start):
     path = tmp_path / "analysis.sqlite"
     seed(path, chain="solana")
-    before = {table: rows(path, table) for table in ("coins", "wallets", "scores", "purchases")}
+    before = {table: rows(path, table) for table in ("coins", "wallets", "coin_verdicts", "coin_scores", "purchases")}
     rpc_calls = []
     monkeypatch.setattr(module, "open_chain", lambda chain: rpc_calls.append(chain))
     args = ["--chain", "robinhood"]
@@ -119,30 +123,30 @@ def test_score_lists_only_clean_and_replaces_stale_window(tmp_path, monkeypatch,
     seed(path)
     client = Client([event for wallet in (CLEAN, BOT, DUMP, UNKNOWN) for event in transfers(wallet)])
     monkeypatch.setattr(score_cli, "open_chain", lambda chain: nullcontext(client))
-    outside_before = [row for row in rows(path, "scores") if row[0] == OUTSIDE]
+    outside_before = [row for row in rows(path, "coin_scores") if row[1] == OUTSIDE]
     invoke(monkeypatch, score_cli, path)
     output = capsys.readouterr().out
     assert CLEAN in output
     assert all(wallet not in output for wallet in (BOT, DUMP, UNKNOWN))
     assert "+1.50" in output  # Display uses token units, not 1,500,000 raw units.
-    assert [row[0] for row in rows(path, "scores")] == [CLEAN, OUTSIDE]
-    assert [row for row in rows(path, "scores") if row[0] == OUTSIDE] == outside_before
+    assert score_wallets(path) == [CLEAN, OUTSIDE]
+    assert [row for row in rows(path, "coin_scores") if row[1] == OUTSIDE] == outside_before
 
     invoke(monkeypatch, score_cli, path, "--to-block", "100")
     assert CLEAN not in capsys.readouterr().out
-    assert rows(path, "scores") == outside_before
+    assert rows(path, "coin_scores") == outside_before
 
 
 def test_score_invalidates_when_no_wallet_remains_eligible(tmp_path, monkeypatch):
     path = tmp_path / "analysis.sqlite"
     seed(path)
     with sqlite3.connect(path) as conn:
-        conn.execute("UPDATE wallets SET verdict = NULL WHERE address = ?", (CLEAN,))
+        conn.execute("UPDATE coin_verdicts SET verdict = NULL WHERE coin = ? AND wallet = ?", (COIN, CLEAN))
     rpc_calls = []
     monkeypatch.setattr(score_cli, "open_chain", lambda chain: rpc_calls.append(chain))
     invoke(monkeypatch, score_cli, path)
     assert rpc_calls == []
-    assert [row[0] for row in rows(path, "scores")] == [OUTSIDE]
+    assert score_wallets(path) == [OUTSIDE]
 
 
 def test_empty_filter_history_becomes_unknown_and_invalidates_score(tmp_path, monkeypatch, capsys):
@@ -150,8 +154,8 @@ def test_empty_filter_history_becomes_unknown_and_invalidates_score(tmp_path, mo
     seed(path)
     monkeypatch.setattr(filter_cli, "open_chain", lambda chain: nullcontext(Client([])))
     invoke(monkeypatch, filter_cli, path)
-    assert all(row[3] is None for row in rows(path, "wallets") if row[0] != OUTSIDE)
-    assert [row[0] for row in rows(path, "scores")] == [OUTSIDE]
+    assert all(row[2] is None for row in rows(path, "coin_verdicts") if row[0] == COIN)
+    assert score_wallets(path) == [OUTSIDE]
     capsys.readouterr()
     invoke(monkeypatch, score_cli, path)
     output = capsys.readouterr().out
@@ -162,7 +166,7 @@ def test_empty_filter_history_becomes_unknown_and_invalidates_score(tmp_path, mo
 def test_failed_score_refresh_preserves_previous_results(tmp_path, monkeypatch, failure):
     path = tmp_path / "analysis.sqlite"
     seed(path, chain=None)
-    before = {table: rows(path, table) for table in ("coins", "scores", "wallets")}
+    before = {table: rows(path, table) for table in ("coins", "coin_scores", "coin_verdicts", "wallets")}
     client = Client(transfers())
     monkeypatch.setattr(score_cli, "open_chain", lambda chain: nullcontext(client))
     if failure == "rpc":
@@ -172,7 +176,7 @@ def test_failed_score_refresh_preserves_previous_results(tmp_path, monkeypatch, 
     else:
         with sqlite3.connect(path) as conn:
             conn.execute(
-                "CREATE TRIGGER reject_score BEFORE INSERT ON scores "
+                "CREATE TRIGGER reject_score BEFORE INSERT ON coin_scores "
                 "BEGIN SELECT RAISE(ABORT, 'score write failed'); END"
             )
     with pytest.raises((RuntimeError, sqlite3.IntegrityError)):
@@ -183,11 +187,11 @@ def test_failed_score_refresh_preserves_previous_results(tmp_path, monkeypatch, 
 def test_failed_filter_refresh_preserves_verdicts_and_scores(tmp_path, monkeypatch):
     path = tmp_path / "analysis.sqlite"
     seed(path, chain=None)
-    before = {table: rows(path, table) for table in ("coins", "scores", "wallets")}
+    before = {table: rows(path, table) for table in ("coins", "coin_scores", "coin_verdicts", "wallets")}
     with sqlite3.connect(path) as conn:
         conn.execute(
-            "CREATE TRIGGER reject_verdict BEFORE UPDATE ON wallets "
-            f"WHEN NEW.address = '{BOT}' BEGIN SELECT RAISE(ABORT, 'verdict write failed'); END"
+            "CREATE TRIGGER reject_verdict BEFORE INSERT ON coin_verdicts "
+            f"WHEN NEW.wallet = '{BOT}' BEGIN SELECT RAISE(ABORT, 'verdict write failed'); END"
         )
     monkeypatch.setattr(filter_cli, "open_chain", lambda chain: nullcontext(Client([])))
     with pytest.raises(sqlite3.IntegrityError):

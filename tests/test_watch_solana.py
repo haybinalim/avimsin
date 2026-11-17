@@ -87,7 +87,7 @@ def test_watch_scans_when_within_window() -> None:
     try:
         save_coin(conn, MINT, 100, chain="solana")
         save_purchase(conn, MINT, SMART1, 101, "t1")
-        save_verdict(conn, SMART1, "ok", "none", "geçti")
+        save_verdict(conn, MINT, SMART1, "ok", "none", "geçti")
         conn.commit()
         client = StubClient(slot=1000, then=1500)  # 500 aralık ≤ 10_000 sınır
         watch_loop(
@@ -119,7 +119,7 @@ def test_watch_signal_emitted_end_to_end_solana() -> None:
         save_coin(conn, MINT, 100, chain="solana")
         for w, tx in ((SMART1, "p1"), (SMART2, "p2")):
             save_purchase(conn, MINT, w, 101, tx)
-            save_verdict(conn, w, "ok", "none", "geçti")
+            save_verdict(conn, MINT, w, "ok", "none", "geçti")
         conn.commit()
 
         txs = {
@@ -151,7 +151,7 @@ def test_mint_events_do_not_produce_signal() -> None:
     try:
         save_coin(conn, MINT, 100, chain="solana")
         save_purchase(conn, MINT, SMART1, 101, "p1")
-        save_verdict(conn, SMART1, "ok", "none", "geçti")
+        save_verdict(conn, MINT, SMART1, "ok", "none", "geçti")
         conn.commit()
 
         txs = {"s1": make_balance_tx(MINT, [], [(SMART1, 100)])}

@@ -1,5 +1,8 @@
 """avimsin-score: filtrelenmiş cüzdanları transfer verisiyle skorlar ve sıralar.
 
+Sonuçlar coin bazlıdır: uygunluk coin_verdicts'ten (o coin, verdict=ok) okunur,
+skorlar coin_scores'ta yalnız bu coin için atomik yenilenir.
+
 Kullanım::
 
     uv run avimsin-score <coin-adresi> [--from-block <blok>] [--db <yol>]
@@ -14,7 +17,16 @@ from .chains import open_chain
 from .filters.base import WalletHistory
 from .scoring.engine import rank, score_wallet
 from .storage.db import connect as db_connect
-from .storage.db import VERDICT_OK, check_coin_chain, normalize_address, save_score, set_chain
+from .storage.db import (
+    LEGACY_NOTE,
+    VERDICT_OK,
+    check_coin_chain,
+    clear_coin_scores,
+    has_coin_results,
+    normalize_address,
+    save_score,
+    set_chain,
+)
 
 
 def main() -> None:
@@ -57,14 +69,27 @@ def main() -> None:
             from_block = args.from_block
 
         wallets = conn.execute(
-            "SELECT DISTINCT p.wallet, w.verdict FROM purchases p"
-            " JOIN wallets w ON w.address = p.wallet WHERE p.coin = ? ORDER BY p.block",
+            "SELECT DISTINCT p.wallet FROM purchases p WHERE p.coin = ? ORDER BY p.block",
             (coin,),
         ).fetchall()
         if not wallets:
             raise SystemExit(f"{coin} için kayıtlı alıcı yok; önce avimsin-scan çalıştırın.")
 
-        eligible = [wallet for wallet, verdict in wallets if verdict == VERDICT_OK]
+        # Uygunluk yalnız bu coin'in kararından gelir (coin_verdicts, verdict=ok).
+        ok_wallets = {
+            r[0]
+            for r in conn.execute(
+                "SELECT wallet FROM coin_verdicts WHERE coin = ? AND verdict = ?",
+                (coin, VERDICT_OK),
+            )
+        }
+        eligible = [w for (w,) in wallets if w in ok_wallets]
+        if not has_coin_results(conn):
+            print(LEGACY_NOTE)
+        elif conn.execute(
+            "SELECT 1 FROM coin_verdicts WHERE coin = ? LIMIT 1", (coin,)
+        ).fetchone() is None:
+            print(f"NOT: {coin} için coin_verdicts yok; önce avimsin-filter {coin} çalıştırın.")
         scores = []
         if eligible:
             with open_chain(chain) as client:
@@ -78,23 +103,19 @@ def main() -> None:
                 if result is not None:
                     scores.append(result)
 
-        # Global şemada coin kaynağı yok: sadece bu coin'in alıcılarına dokunur,
-        # ancak ortak cüzdanın başka coin'den gelen skorunu ayıramayız (Plan B).
+        # Yalnız bu coin'in coin_scores satırları atomik yenilenir; başka coin'e dokunulmaz.
         with conn:
             set_chain(conn, coin, chain)
-            conn.execute(
-                "DELETE FROM scores WHERE wallet IN (SELECT wallet FROM purchases WHERE coin = ?)",
-                (coin,),
-            )
+            clear_coin_scores(conn, coin)
             for result in scores:
                 save_score(
-                    conn, result.wallet, result.winrate, result.net_pnl,
+                    conn, coin, result.wallet, result.winrate, result.net_pnl,
                     result.trades, result.frequency, result.score, token_unit,
                 )
 
         ranked = rank(scores)
         print("Transfer proxy: çıkış satış değildir; oran ekonomik winrate, net akış finansal P&L değildir.")
-        print("Skorlar global cüzdan kaydıdır; ortak cüzdanlarda coin sonuç izolasyonu yoktur.")
+        print(f"Skorlar coin bazlıdır ({coin}); diğer coinlerin skorlarına dokunulmadı.")
         print(f"{'SIRA':<6}{'CUZDAN':<44}{'SCORE':<8}{'ORAN*':<10}{'NET AKIS (token)':>20}{'CIKIS':>8}")
         print("-" * 96)
         for i, s in enumerate(ranked, start=1):

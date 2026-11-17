@@ -9,6 +9,8 @@ Dayanıklılık (SQLite, zincir anahtarlı):
 - ``watch_inflows``: pencere içindeki girişler (turlar arası birikim).
 - ``watch_alerts``: bildirilen cüzdanlar. Aynı küme tekrar gönderilmez; yeni cüzdan
   katılırsa "güncelleme" gider; ilk tam sinyalden ``WATCH_ALERT_COOLDOWN_SECONDS`` sonra coin sıfırlanır.
+Smart wallet kümesi coin bazlı kararlardan (``coin_verdicts``) türetilir:
+``smart_wallets_for_chain``. Küme boşsa uyarı yazılır (ilk tur, dolu→boş geçişi).
 Teslimat durumdan türetilir: gönderim hatası alert kaydı yazılmadan kalır, sonraki
 tur aynı sinyali yeniden dener (pencere dışına düşerse kaybolur — bilinen sınır).
 """
@@ -221,6 +223,27 @@ class WatchRpcError(RuntimeError):
     """once=True turunda RPC hatası; mesaj ve zincir bağlamı URL/anahtar taşımaz."""
 
 
+def smart_wallets_for_chain(conn: sqlite3.Connection, chain: str) -> set[str]:
+    """Seçili zincirde en az bir coin'de verdict=ok ve hiçbir coin'de verdict=bot olmayan cüzdanlar.
+
+    Karar coin bazlıdır (coin_verdicts). dump coin'e özgüdür, tek başına dışlamaz;
+    bot ise cüzdanın niteliğidir, herhangi bir coin'de bot olan dışlanır. NULL zincirli
+    coin'ler ve başka zincirin kararları hesaba katılmaz.
+    """
+    return {
+        r[0]
+        for r in conn.execute(
+            "SELECT DISTINCT v.wallet FROM coin_verdicts v"
+            " JOIN coins c ON c.address = v.coin"
+            " WHERE c.chain = ? AND v.verdict = 'ok'"
+            " AND v.wallet NOT IN ("
+            "   SELECT b.wallet FROM coin_verdicts b JOIN coins bc ON bc.address = b.coin"
+            "   WHERE bc.chain = ? AND b.verdict = 'bot')",
+            (chain, chain),
+        )
+    }
+
+
 def watch_loop(
     client: ChainClient,
     conn: sqlite3.Connection,
@@ -278,6 +301,7 @@ def watch_loop(
         print(f"Cursor'dan devam: {chain} blok {last_block}.")
 
     rpc_failures = 0
+    smart_known: bool | None = None  # son turda smart wallet kümesi doluydu mu (None: henüz bakılmadı)
     while True:
         rpc_error: Exception | None = None
         latest = last_block  # block_number düşerse son bilinen cursor
@@ -299,16 +323,13 @@ def watch_loop(
                             "SELECT address FROM coins WHERE chain = ?", (chain,)
                         ).fetchall()
                     ]
-                    smart_wallets = {
-                        r[0]
-                        for r in conn.execute(
-                            "SELECT DISTINCT p.wallet FROM purchases p"
-                            " JOIN coins c ON c.address = p.coin"
-                            " JOIN wallets w ON w.address = p.wallet"
-                            " WHERE c.chain = ? AND w.verdict = 'ok'",
-                            (chain,),
-                        ).fetchall()
-                    }
+                    smart_wallets = smart_wallets_for_chain(conn, chain)
+                    if not smart_wallets and smart_known is not False:
+                        print(
+                            f"UYARI: {chain} için smart wallet yok; avimsin-filter ve"
+                            " avimsin-score'u coin bazında yeniden çalıştırın."
+                        )
+                    smart_known = bool(smart_wallets)
                     events: list[TransferEvent] = []
                     for coin in coins:
                         events.extend(client.token_transfers(coin, last_block + 1, latest))

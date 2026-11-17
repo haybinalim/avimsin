@@ -147,14 +147,14 @@ def test_ineligible_verdict_invalidates_score_in_same_transaction(verdict) -> No
     conn = connect(":memory:")
     try:
         save_purchase(conn, EVM_COIN, EVM_WALLET, 1, "tx")
-        save_verdict(conn, EVM_WALLET, "ok", "-", "passed")
-        save_score(conn, EVM_WALLET, 1.0, 0, 1, 0.1, 0.6)
+        save_verdict(conn, EVM_COIN, EVM_WALLET, "ok", "-", "passed")
+        save_score(conn, EVM_COIN, EVM_WALLET, 1.0, 0, 1, 0.1, 0.6)
         conn.commit()
-        save_verdict(conn, EVM_WALLET, verdict, "rule", "not eligible")
-        assert conn.execute("SELECT wallet FROM scores").fetchall() == []
+        save_verdict(conn, EVM_COIN, EVM_WALLET, verdict, "rule", "not eligible")
+        assert conn.execute("SELECT wallet FROM coin_scores").fetchall() == []
         conn.rollback()
-        assert conn.execute("SELECT verdict FROM wallets").fetchone() == ("ok",)
-        assert conn.execute("SELECT wallet FROM scores").fetchall() == [(EVM_WALLET,)]
+        assert conn.execute("SELECT verdict FROM coin_verdicts").fetchone() == ("ok",)
+        assert conn.execute("SELECT wallet FROM coin_scores").fetchall() == [(EVM_WALLET,)]
     finally:
         conn.close()
 
