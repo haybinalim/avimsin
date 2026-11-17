@@ -257,3 +257,18 @@ def test_address_chain_matches_pass() -> None:
         assert check_coin_chain(conn, SOL_COIN, "solana") == "solana"
     finally:
         conn.close()
+
+
+def test_registered_chain_used_when_chain_omitted() -> None:
+    conn = connect(":memory:")
+    try:
+        save_coin(conn, EVM_COIN, 1, chain="robinhood")
+        save_coin(conn, SOL_COIN, 2, chain="solana")
+        assert check_coin_chain(conn, EVM_COIN, None) == "robinhood"
+        assert check_coin_chain(conn, SOL_COIN, None) == "solana"
+        with pytest.raises(ValueError):  # açık --chain uyuşmazlığı korunur
+            check_coin_chain(conn, EVM_COIN, "solana")
+        with pytest.raises(ValueError, match="--chain robinhood"):  # kayıtsız 0x
+            check_coin_chain(conn, "0x" + "cd" * 20, None)
+    finally:
+        conn.close()

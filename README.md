@@ -127,7 +127,7 @@ uv run pytest                 # test ağı (sahte EVM/Solana zincirleri, ağ yok
 ```
 
 `scan/filter/score/watch` komutları `--chain robinhood|solana` bayrağıyla zincir
-seçer (varsayılan `solana`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
+seçer (varsayılan: kayıtlı zincir, yoksa `solana`; `watch` için `solana`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
 verilmezse public devnet ucu kullanılır.
 
 `0x` EVM adresi `--chain robinhood` olmadan verilirse (ya da base58 adres

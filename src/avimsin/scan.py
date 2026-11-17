@@ -25,7 +25,7 @@ def main() -> None:
     parser.add_argument("--count", type=int, default=50, help="Kaç erken alıcı toplanacak")
     parser.add_argument(
         "--chain", default=None, choices=["robinhood", "solana"],
-        help="Zincir seçimi (varsayılan: solana; eski zincirsiz kayıt için zorunlu)",
+        help="Zincir seçimi (varsayılan: kayıtlı zincir, yoksa solana; eski zincirsiz kayıt için zorunlu)",
     )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()

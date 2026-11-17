@@ -135,7 +135,12 @@ def check_coin_chain(conn: sqlite3.Connection, address: str, chain: str | None) 
     row = conn.execute("SELECT chain FROM coins WHERE address = ?", (address,)).fetchone()
     if row is not None and row[0] is None and chain is None:
         raise ValueError(f"{address} zinciri bilinmiyor; açıkça --chain belirtin.")
-    selected = chain if chain is not None else DEFAULT_CLI_CHAIN
+    if chain is not None:
+        selected = chain
+    elif row is not None:  # NULL yukarıda elendi: kayıtlı zincir kullanılır
+        selected = row[0]
+    else:
+        selected = DEFAULT_CLI_CHAIN
     if selected not in ("robinhood", "solana"):
         raise ValueError(f"Desteklenmeyen zincir: {selected}")
     check_address_matches_chain(address, selected)
