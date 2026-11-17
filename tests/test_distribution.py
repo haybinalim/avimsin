@@ -72,7 +72,7 @@ def test_solana_stream_early_stop_counts_only_real_buyers() -> None:
     sigs.append(sig("dist", 100))
     for i in range(5):
         w = addr(50 + i)
-        txs[f"buy{i}"] = make_balance_tx(MINT, [(addr(99), 10), (w, 0)], [(addr(99), 0), (w, 10)])
+        txs[f"buy{i}"] = make_balance_tx(MINT, [(POOL, 10), (w, 0)], [(POOL, 0), (w, 10)])
         sigs.append(sig(f"buy{i}", 200 + i))
     sigs.sort(key=lambda e: -e["slot"])
     chain = FakeSolanaChain(

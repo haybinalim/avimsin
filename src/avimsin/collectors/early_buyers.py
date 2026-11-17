@@ -29,6 +29,7 @@ class DistributionSkips:
 
     receivers: int = 0
     txs: int = 0
+    wallet_to_wallet: int = 0  # alım sayılmayan cüzdandan cüzdana transferler
 
 
 def _tx_groups(events: Iterable[TransferEvent]) -> Iterator[list[TransferEvent]]:
@@ -87,6 +88,9 @@ def earliest_buyers(
         groups: Iterable[list[TransferEvent]] = per_tx(token, from_block, latest)
     else:
         groups = _tx_groups(client.token_transfers(token, from_block, latest))
+    # Adaptör alım kaynağını ayırt edebiliyorsa (Solana: eğri dışı PDA gönderen) cüzdandan
+    # cüzdana transferler alım sayılmaz; yoksa (EVM) süzme yok — davranış değişmez.
+    is_market = getattr(client, "is_market_sender", None)
     seen: set[str] = set()
     buyers: list[EarlyBuyer] = []
     for group in groups:
@@ -103,6 +107,10 @@ def earliest_buyers(
                 continue  # burn: yakılan bakiye sahipsizdir, alıcı değildir
             if (sender, receiver) in dist:
                 continue  # içeriden dağıtım: satın alma değil
+            if is_market is not None and not is_market(sender):
+                if skips is not None:
+                    skips.wallet_to_wallet += 1
+                continue  # cüzdandan cüzdana transfer: alım değil
             if receiver in seen:
                 continue
             seen.add(receiver)

@@ -53,9 +53,18 @@ class ChainStreaming(Protocol):
         ...
 
     def wallet_transfers(
-        self, token: str, wallets: list[str], from_slot: int, to_slot: int
+        self,
+        token: str,
+        wallets: list[str],
+        from_slot: int,
+        to_slot: int,
+        purchase_txs: dict[str, list[str]] | None = None,
     ) -> WalletTransfers:
         """Yalnız verilen cüzdanların token transferleri (cüzdan bazlı geçmiş)."""
+        ...
+
+    def is_market_sender(self, address: str) -> bool:
+        """Gönderen gerçek bir alım kaynağı mı (Solana: eğri dışı PDA)? Yoksa süzme yok."""
         ...
 
     def attach_tx_cache(self, path: str) -> None:

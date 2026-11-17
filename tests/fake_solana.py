@@ -28,6 +28,7 @@ class FakeSolanaChain:
         fill_blocks: bool = False,  # True: işlemsiz her slotta ilgisiz bir imza ("fill<slot>") vardır
     ) -> None:
         self.fill_blocks = fill_blocks
+        self.null_first: dict[str, int] = {}  # imza -> getTransaction'ın kaç kez null döneceği
         self.calls: list[tuple[str, list]] = []
         self.address_signatures = address_signatures
         self.first_available = first_available
@@ -75,6 +76,9 @@ class FakeSolanaChain:
         if method == "getSignaturesForAddress":
             return self._signatures(params[0], params[1] if len(params) > 1 else {})
         if method == "getTransaction":
+            if self.null_first.get(params[0], 0) > 0:
+                self.null_first[params[0]] -= 1
+                return None
             return self.transactions[params[0]]
         if method == "getAccountInfo":
             owner = self.owners.get(params[0])

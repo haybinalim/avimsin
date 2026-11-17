@@ -25,7 +25,7 @@ from ..config import settings
 from ..collectors.transfers import ZERO_ADDRESS, TransferEvent, WalletTransfers
 from ..storage.tx_cache import TxCache, slim_transaction
 from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu sözleşme
-from .solana_addr import TOKEN_PROGRAMS, derive_ata
+from .solana_addr import TOKEN_PROGRAMS, derive_ata, is_on_curve, pubkey_bytes
 
 # Sistem Programı: normal cüzdan (EOA benzeri) bu owner'a sahiptir; farklı
 # owner'lı hesaplar program/SPL hesabıdır (is_contract → True).
@@ -47,6 +47,8 @@ CHUNK_MAX_SLOTS = 200_000
 # İkili arama bu genişliğe inince bırakılır (sonra imleçten geriye sayfalanır).
 CREATION_SEARCH_SLOTS = 1000
 PROGRESS_EVERY = 100
+# getTransaction null dönerse (henüz indekslenmemiş/geçici) yeniden deneme bekleme süreleri (sn).
+NULL_TX_RETRY_WAITS = (2.0, 4.0)
 # getBlock: atlanmış slot / blok yok — bir sonraki slot denenir.
 _SKIPPED_BLOCK_CODES = {-32007, -32009, -32004}
 
@@ -82,6 +84,7 @@ class SolanaClient:
         self._last_call: float | None = None
         self.min_interval = settings.solana_min_interval_seconds if min_interval is None else min_interval
         self.tx_cache: TxCache | None = None
+        self.unreadable: list[str] = []  # null kalıp atlanan işlem imzaları
         self.rate_limit_retries = rate_limit_retries
         self.rate_limit_wait = rate_limit_wait
 
@@ -175,7 +178,7 @@ class SolanaClient:
                 return out
             before = batch[-1]["signature"]
 
-    def get_transaction(self, signature: str) -> dict:
+    def get_transaction(self, signature: str) -> dict | None:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir).
 
         Önbellek bağlıysa (attach_tx_cache) sonlanmış işlem bir kez indirilir ve
@@ -187,11 +190,18 @@ class SolanaClient:
                 return cached
         # Resmî sürüm sözleşmesi: legacy/v0/v1 için en yüksek desteklenen sürüm 1.
         # ALT v0'a özgüdür. JSON-parsed bakiye alanları ortak kullanılır.
-        tx = self.call(
-            "getTransaction",
-            [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
-        )
-        if self.tx_cache is not None and tx is not None:
+        params = [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}]
+        tx = self.call("getTransaction", params)
+        for wait in NULL_TX_RETRY_WAITS:
+            if tx is not None:
+                break
+            time.sleep(wait)
+            tx = self.call("getTransaction", params)
+        if tx is None:
+            # Okunamadı: önbelleğe YAZILMAZ (sonraki çalıştırma yeniden dener); çağıran atlar.
+            self.unreadable.append(signature)
+            return None
+        if self.tx_cache is not None:
             tx = slim_transaction(tx)
             self.tx_cache.put(signature, tx)
         return tx
@@ -371,6 +381,8 @@ class SolanaAdapter:
             if entry.get("err") is not None:
                 continue  # başarısız işlem bakiye değiştirmez
             tx = self._client.get_transaction(entry["signature"])
+            if tx is None:
+                continue  # okunamadı; client.unreadable'a kaydedildi
             opened += 1
             if opened % PROGRESS_EVERY == 0:
                 _progress(f"{opened} işlem açıldı (slot {entry['slot']})")
@@ -385,6 +397,11 @@ class SolanaAdapter:
         for events in self.iter_tx_transfers(token, from_slot, to_slot):
             yield from events
 
+    @property
+    def unreadable(self) -> list[str]:
+        """RPC'den okunamayıp atlanan işlem imzaları."""
+        return self._client.unreadable
+
     def _token_program(self, mint: str) -> str:
         program = self._token_programs.get(mint)
         if program is None:
@@ -394,16 +411,53 @@ class SolanaAdapter:
             self._token_programs[mint] = program
         return program
 
+    def is_market_sender(self, address: str) -> bool:
+        """Gönderen alım kaynağı mı? Eğri DIŞI adres (PDA: bonding curve / havuz sahibi) evet;
+        eğri üstü normal cüzdan hayır (cüzdandan cüzdana transfer/dağıtım alım değildir).
+        Çözülemeyen adres (geçersiz base58) süzülmez."""
+        try:
+            return not is_on_curve(pubkey_bytes(address))
+        except ValueError:
+            return True
+
+    def _extra_token_accounts(self, wallet: str, token: str, tx_signatures: list[str]) -> list[str]:
+        """Cüzdanın alım işlemlerinde bu mint için sahibi olduğu token hesapları (ATA dışı olabilir)."""
+        found: list[str] = []
+        for signature in tx_signatures:
+            tx = self._client.get_transaction(signature)
+            if tx is None:
+                continue
+            keys = tx["transaction"]["message"]["accountKeys"]
+            for side in ("preTokenBalances", "postTokenBalances"):
+                for balance in tx["meta"].get(side) or []:
+                    index = balance.get("accountIndex")
+                    if (
+                        balance.get("mint") == token
+                        and balance.get("owner") == wallet
+                        and isinstance(index, int)
+                        and index < len(keys)
+                        and keys[index] not in found
+                    ):
+                        found.append(keys[index])
+        return found
+
     def wallet_transfers(
-        self, token: str, wallets: list[str], from_slot: int, to_slot: int
+        self,
+        token: str,
+        wallets: list[str],
+        from_slot: int,
+        to_slot: int,
+        purchase_txs: dict[str, list[str]] | None = None,
     ) -> WalletTransfers:
         """Cüzdanların mint'e ait transferleri: yalnız cüzdanın ATA imzaları açılır.
 
         ATA = PDA(owner, token_program, mint). [from_slot, to_slot] içindeki imzalar,
         ``slot_cursor(to_slot+1)`` imleciyle alınır (pencereden yeni imzalar indirilmez).
         Cüzdan başına pencere içi imza sayısı SOLANA_MAX_TX_PER_WALLET'i aşarsa o
-        cüzdanın işlemleri açılmaz (``capped``). Bilinen sınır: ATA dışı token hesabı
-        kullanan cüzdanın transferleri görülmez.
+        cüzdanın işlemleri açılmaz (``capped``). ``purchase_txs`` (cüzdan -> alım imzaları)
+        verilirse o işlemlerde cüzdanın sahibi olduğu ATA dışı token hesapları da taranır;
+        aynı imza birden çok hesapta görünse bir kez işlenir. Bilinen sınır: alım
+        işleminde görünmeyen ATA dışı hesabın transferleri görülmez.
         """
         program = self._token_program(token)
         limit = settings.solana_max_tx_per_wallet
@@ -411,11 +465,22 @@ class SolanaAdapter:
         signatures: dict[str, int] = {}  # imza -> slot (tekilleştirilmiş)
         counts: dict[str, int] = {}
         capped: set[str] = set()
-        for wallet in wallets:
-            ata = derive_ata(wallet, token, program)
-            entries = self._client.get_signatures_for_address(
-                ata, from_slot=from_slot, until_slot=to_slot, max_signatures=limit + 1, before=cursor
-            )
+        for i, wallet in enumerate(wallets, start=1):
+            if i % 10 == 0:
+                _progress(f"ATA imzaları: {i}/{len(wallets)} cüzdan")
+            accounts = [derive_ata(wallet, token, program)]
+            if purchase_txs:
+                for extra in self._extra_token_accounts(wallet, token, purchase_txs.get(wallet, [])):
+                    if extra not in accounts:
+                        accounts.append(extra)
+            entries = []
+            for account in accounts:
+                entries.extend(
+                    self._client.get_signatures_for_address(
+                        account, from_slot=from_slot, until_slot=to_slot,
+                        max_signatures=limit + 1, before=cursor,
+                    )
+                )
             counts[wallet] = len(entries)
             if len(entries) > limit:
                 capped.add(wallet)
@@ -427,6 +492,8 @@ class SolanaAdapter:
         total = len(signatures)
         for n, (signature, slot) in enumerate(signatures.items(), start=1):
             tx = self._client.get_transaction(signature)
+            if tx is None:
+                continue  # okunamadı; client.unreadable'a kaydedildi
             events.extend(self._tx_to_events(tx, token, slot, signature))
             if n % PROGRESS_EVERY == 0:
                 _progress(f"{n}/{total} işlem açıldı")

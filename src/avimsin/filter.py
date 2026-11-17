@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from .chains import attach_tx_cache, open_chain
+from .chains import attach_tx_cache, open_chain, report_unreadable
 from .chains.protocol import ChainClient
 from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
@@ -101,10 +101,16 @@ def main() -> None:
                     # bekleyen pencere yazımı önce commit edilir; hata olursa aşağıda geri alınır.
                     conn.commit()
                     attach_tx_cache(client, args.db)
-                    fetched = wallet_fetch(coin, wallets, window.from_block, window.to_block)
+                    purchase_txs: dict[str, list[str]] = {}
+                    for w, t in conn.execute("SELECT wallet, tx FROM purchases WHERE coin = ?", (coin,)):
+                        purchase_txs.setdefault(w, []).append(t)
+                    fetched = wallet_fetch(
+                        coin, wallets, window.from_block, window.to_block, purchase_txs
+                    )
                     events = fetched.events
                     capped, capped_limit = fetched.capped, fetched.limit
                     signature_counts = fetched.signature_counts
+                    report_unreadable(client)
                 else:
                     events = client.token_transfers(coin, window.from_block, window.to_block)
                 for wallet in wallets:

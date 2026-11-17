@@ -31,6 +31,17 @@ def attach_tx_cache(client, db_path: str) -> None:
         attach(db_path)
 
 
+def report_unreadable(client) -> None:
+    """Okunamayıp atlanan işlem varsa UYARI basar (stdout) ve ilk 5 imzayı stderr'e yazar."""
+    skipped = list(getattr(client, "unreadable", None) or [])
+    if not skipped:
+        return
+    import sys
+
+    print(f"UYARI: {len(skipped)} işlem RPC'den okunamadı (atlandı)")
+    print("atlanan imzalar: " + ", ".join(skipped[:5]) + (" ..." if len(skipped) > 5 else ""), file=sys.stderr)
+
+
 def check_address_matches_chain(address: str, chain: str) -> None:
     """Adres biçimi seçilen zincirle uyuşmuyorsa RPC'den ÖNCE net hata verir.
 

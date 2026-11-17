@@ -42,6 +42,11 @@ daha fazla farklı alıcıya giden transferler içeriden dağıtım (dev/bundle)
 erken alıcı olmaz (scan "N dağıtım alıcısı atlandı" yazar). Her cüzdana ayrı işlemle yapılan
 dağıtım bu kuralla yakalanmaz.
 
+**Alım tanımı (Solana):** alım yalnız gönderen token sahibi eğri DIŞI bir adresse (PDA: bonding
+curve / havuz vault sahibi) sayılır; eğri üstü normal cüzdandan gelen cüzdandan cüzdana transferdir,
+erken alıcı değildir (scan "N cüzdan-cüzdan transferi alım sayılmadı" yazar). Havuzu normal
+cüzdan adresiyle çalışan nadir kurulumlar bu yüzden kaçabilir.
+
 **Solana hızlı tarama (public RPC ~1 istek/sn):**
 - `avimsin-scan <mint>`: `--from-block` Solana'da opsiyoneldir; verilmezse başlangıç mint'in
   oluşturulduğu slottur (`getBlock` imleç imzası + `getSignaturesForAddress(before=...)` ile

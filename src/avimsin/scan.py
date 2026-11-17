@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import argparse
 
-from .chains import attach_tx_cache, open_chain
+from .chains import attach_tx_cache, open_chain, report_unreadable
 from .collectors.early_buyers import DistributionSkips, earliest_buyers
 from .storage.db import connect as db_connect
 from .storage.db import check_coin_chain, save_coin, save_purchase
@@ -54,6 +54,7 @@ def main() -> None:
                 print(f"Başlangıç slotu (mint oluşturma): {from_block}")
             skips = DistributionSkips()
             buyers = earliest_buyers(client, args.token, from_block, args.count, skips)
+            report_unreadable(client)
         with conn:
             save_coin(conn, args.token, from_block, chain=chain)
             for buyer in buyers:
@@ -61,6 +62,8 @@ def main() -> None:
     finally:
         conn.close()
 
+    if skips.wallet_to_wallet:
+        print(f"{skips.wallet_to_wallet} cüzdan-cüzdan transferi alım sayılmadı")
     if skips.txs:
         print(f"{skips.receivers} dağıtım alıcısı atlandı ({skips.txs} işlem)")
     print(f"{len(buyers)} erken alıcı bulundu, {args.db} içine yazıldı:")

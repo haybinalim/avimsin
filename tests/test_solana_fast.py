@@ -35,7 +35,7 @@ def addr(n: int) -> str:
 
 
 MINT = addr(200)
-POOL = addr(150)
+POOL = derive_ata(addr(140), addr(200))  # eğri dışı (PDA) gönderen: gerçek alım kaynağı gibi
 CREATOR = addr(151)
 
 
@@ -400,3 +400,114 @@ def test_min_interval_env_and_default(monkeypatch) -> None:
     monkeypatch.setattr(solana, "settings", s)
     with SolanaClient("http://x") as client:
         assert client.min_interval == 0.25
+
+
+# --- getTransaction null ----------------------------------------------------------------
+
+
+def test_null_transaction_skipped_counted_not_cached(tmp_path, monkeypatch, capsys) -> None:
+    waits = []
+    monkeypatch.setattr(solana.time, "sleep", waits.append)
+    chain, wallets, _ = wallet_world()
+    chain.null_first["buy1"] = 99  # kalıcı null
+    path = str(tmp_path / "c.sqlite")
+    connect(path).close()
+    adapter = make_adapter(chain)
+    adapter.attach_tx_cache(path)
+    result = adapter.wallet_transfers(MINT, wallets, 100, 2000)
+    assert {e.tx for e in result.events} == {"buy0", "buy2"}  # buy1 atlandı, çökmedi
+    assert adapter.unreadable == ["buy1"]
+    assert waits == [2.0, 4.0]  # 2 yeniden deneme
+    assert sum(1 for m, p in chain.calls if m == "getTransaction" and p[0] == "buy1") == 3
+    adapter.close()
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM sol_tx_cache WHERE signature='buy1'").fetchone()[0] == 0
+    from avimsin.chains import report_unreadable
+
+    report_unreadable(adapter)
+    captured = capsys.readouterr()
+    assert "UYARI: 1 işlem RPC'den okunamadı" in captured.out and "buy1" in captured.err
+
+
+def test_null_then_filled_on_retry_is_used(monkeypatch) -> None:
+    monkeypatch.setattr(solana.time, "sleep", lambda s: None)
+    chain, wallets, _ = wallet_world()
+    chain.null_first["buy1"] = 1
+    adapter = make_adapter(chain)
+    result = adapter.wallet_transfers(MINT, wallets, 100, 2000)
+    assert {e.tx for e in result.events} == {"buy0", "buy1", "buy2"}
+    assert adapter.unreadable == []
+
+
+def test_ata_progress_every_ten_wallets(capsys) -> None:
+    chain, _, _ = wallet_world()
+    ws = [addr(i + 10) for i in range(20)]
+    make_adapter(chain).wallet_transfers(MINT, ws, 100, 2000)
+    assert "ATA imzaları: 10/20 cüzdan" in capsys.readouterr().err
+
+
+# --- ATA dışı hesap ve alım tanımı --------------------------------------------------------
+
+
+def _tx_with_accounts(accounts, mint, pre, post):
+    """accounts: token hesap adresleri; pre/post: (hesap_indeksi, owner, miktar)."""
+
+    def side(entries):
+        return [
+            {"accountIndex": i, "mint": mint, "owner": o, "uiTokenAmount": {"amount": str(a)}}
+            for i, o, a in entries
+        ]
+
+    return {
+        "transaction": {"message": {"accountKeys": accounts}},
+        "meta": {"preTokenBalances": side(pre), "postTokenBalances": side(post)},
+    }
+
+
+def test_non_ata_token_account_found_via_purchase_tx_and_dedup() -> None:
+    wallet = addr(7)
+    ata = derive_ata(wallet, MINT, TOKEN_PROGRAM)
+    odd = addr(88)  # ATA olmayan token hesabı
+    pool_ta = addr(89)
+    txs = {
+        "buy": _tx_with_accounts(
+            [pool_ta, odd], MINT, [(0, POOL, 1000), (1, wallet, 0)], [(0, POOL, 0), (1, wallet, 1000)]
+        ),
+        "dup": _tx_with_accounts(
+            [pool_ta, odd, ata], MINT,
+            [(0, POOL, 50), (1, wallet, 1000), (2, wallet, 0)],
+            [(0, POOL, 0), (1, wallet, 1000), (2, wallet, 50)],
+        ),
+    }
+    buy, dup = sig("buy", 100), sig("dup", 120)
+    chain = FakeSolanaChain(
+        signatures=[dup, buy], transactions=txs, latest_slot=5_000, owners={MINT: TOKEN_PROGRAM},
+        address_signatures={MINT: [dup, buy], ata: [dup], odd: [dup, buy]}, fill_blocks=True,
+    )
+    adapter = make_adapter(chain)
+    without = adapter.wallet_transfers(MINT, [wallet], 100, 2000)
+    assert {e.tx for e in without.events} == {"dup"}  # yalnız ATA: alım görünmez
+    result = adapter.wallet_transfers(MINT, [wallet], 100, 2000, {wallet: ["buy"]})
+    txs_seen = [e.tx for e in result.events]
+    assert "buy" in txs_seen
+    assert txs_seen.count("dup") == 1  # iki hesapta görünen imza tek sayıldı
+
+
+def test_wallet_to_wallet_transfer_is_not_a_purchase() -> None:
+    from avimsin.collectors.early_buyers import DistributionSkips
+
+    on_curve = next(addr(n) for n in range(1, 120) if is_on_curve(bytes([n]) * 32))
+    assert not is_on_curve(b58decode(POOL))  # PDA vektörü: türetilmiş ATA eğri dışıdır
+    txs = {
+        "w2w": make_balance_tx(MINT, [(on_curve, 100), (addr(60), 0)], [(on_curve, 0), (addr(60), 100)]),
+        "buy": make_balance_tx(MINT, [(POOL, 100), (addr(61), 0)], [(POOL, 0), (addr(61), 100)]),
+    }
+    sigs = [sig("buy", 300), sig("w2w", 200)]
+    chain = FakeSolanaChain(
+        signatures=sigs, transactions=txs, latest_slot=5_000,
+        address_signatures={MINT: sigs}, fill_blocks=True,
+    )
+    skips = DistributionSkips()
+    buyers = earliest_buyers(make_adapter(chain), MINT, 100, 5, skips)
+    assert [b.wallet for b in buyers] == [addr(61)]
+    assert skips.wallet_to_wallet == 1
