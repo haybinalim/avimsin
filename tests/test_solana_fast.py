@@ -8,6 +8,7 @@ import sys
 from contextlib import nullcontext
 from dataclasses import replace
 
+import httpx
 import pytest
 
 from avimsin import filter as filter_cli
@@ -532,3 +533,78 @@ def test_extra_accounts_with_raw_dict_account_keys() -> None:
     )
     adapter = make_adapter(chain)  # önbelleksiz: ham yanıt
     assert adapter._extra_token_accounts(wallet, MINT, ["buy"]) == [odd]
+
+
+# --- geçici RPC hataları ve transport yeniden denemeleri ------------------------------------
+
+
+def _scripted_client(monkeypatch, script):
+    """script: sırayla dönen yanıtlar (httpx.Response ya da Exception); bekleme listede toplanır."""
+    waits: list[float] = []
+    monkeypatch.setattr(solana.time, "sleep", waits.append)
+    items = iter(script)
+
+    def handle(request):
+        item = next(items)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    client = SolanaClient("http://sahte", transport=httpx.MockTransport(handle), min_interval=0.0)
+    return client, waits
+
+
+def _rpc_error(code, message):
+    return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "error": {"code": code, "message": message}})
+
+
+def _ok(result):
+    return httpx.Response(200, json={"jsonrpc": "2.0", "id": 1, "result": result})
+
+
+def test_transient_rpc_error_32019_retried_then_succeeds(monkeypatch) -> None:
+    client, waits = _scripted_client(
+        monkeypatch,
+        [_rpc_error(-32019, "Failed to query long-term storage; please try again"),
+         _rpc_error(-32005, "Node is behind"), _ok(42)],
+    )
+    assert client.get_slot() == 42
+    assert waits == [2.0, 4.0]  # üstel 2 -> 4
+
+
+def test_try_again_message_is_transient(monkeypatch) -> None:
+    client, _ = _scripted_client(monkeypatch, [_rpc_error(-32000, "busy, Try Again later"), _ok(1)])
+    assert client.get_slot() == 1
+
+
+def test_transient_rpc_error_budget_is_bounded(monkeypatch) -> None:
+    client, waits = _scripted_client(monkeypatch, [_rpc_error(-32019, "try again")] * 10)
+    with pytest.raises(solana.RpcError):
+        client.get_slot()
+    assert len(waits) == 5  # 6 deneme
+
+
+def test_transport_error_five_times_then_success(monkeypatch) -> None:
+    script = [httpx.ConnectError("down")] * 5 + [_ok(9)]
+    client, waits = _scripted_client(monkeypatch, script)
+    assert client.get_slot() == 9
+    assert waits == [2.0, 4.0, 8.0, 16.0, 32.0]
+
+
+def test_skipped_slot_codes_not_retried(monkeypatch) -> None:
+    waits: list[float] = []
+    monkeypatch.setattr(solana.time, "sleep", waits.append)
+    chain = FakeSolanaChain(signatures=[sig("a", 20)], transactions={}, latest_slot=100)
+    client = SolanaClient("http://sahte", transport=chain.transport(), min_interval=0.0)
+    # 10..19 atlanmış (-32007); slot_cursor 20'de imzayı bulur; yeniden deneme beklemesi yok.
+    assert client.slot_cursor(10) == "a"
+    assert waits == []
+    with pytest.raises(solana.RpcError):
+        client.call("getBlock", [5, {}])  # tek atlanmış slot: hata aynen yükselir
+    assert waits == []
+
+
+def test_http_timeout_split() -> None:
+    client = SolanaClient("http://sahte")
+    t = client._http.timeout
+    assert (t.connect, t.read, t.write, t.pool) == (10.0, 60.0, 30.0, 10.0)

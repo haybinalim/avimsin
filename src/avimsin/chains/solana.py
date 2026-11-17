@@ -33,8 +33,15 @@ SYSTEM_PROGRAM = "11111111111111111111111111111111"
 
 # Pacing istemci yükünü sınırlar; paylaşımlı public RPC kovası yine 429 verebilir.
 # Rate-limit ve transport/5xx bütçeleri ayrı ve çağrı başına sonludur.
-MAX_RETRIES = 3
-BASE_WAIT = 1.0
+# Uzun taramalar ağ/RPC kesintisinde düşmesin: transport/5xx için 8 deneme, geçici
+# JSON-RPC hataları için ayrı 6 deneme; ikisinde de bekleme üstel 2 -> 60 sn.
+MAX_RETRIES = 8
+RPC_RETRIES = 6
+BASE_WAIT = 2.0
+MAX_WAIT = 60.0
+# Geçici JSON-RPC hata kodları (yeniden denenir): long-term storage, node geride, blok durumu henüz yok.
+TRANSIENT_RPC_CODES = {-32019, -32005, -32014}
+# Bu kodlar "atlanmış slot / blok yok" demektir (slot_cursor'un anlamı); ASLA yeniden denenmez.
 MIN_INTERVAL_SECONDS = 0.9
 RATE_LIMIT_RETRIES = 8
 RATE_LIMIT_WAIT_SECONDS = 20.0
@@ -61,6 +68,13 @@ class RpcError(RuntimeError):
         self.code = error.get("code") if isinstance(error, dict) else None
 
 
+def _is_transient(error: object) -> bool:
+    """Geçici JSON-RPC hatası mı (kod listesinde ya da mesajında "try again")?"""
+    if not isinstance(error, dict):
+        return False
+    return error.get("code") in TRANSIENT_RPC_CODES or "try again" in str(error.get("message", "")).lower()
+
+
 def _progress(message: str) -> None:
     """Seyrek ilerleme satırı (stderr); URL/anahtar içermez."""
     print(message, file=sys.stderr, flush=True)
@@ -72,14 +86,20 @@ class SolanaClient:
     def __init__(
         self,
         url: str,
-        timeout: float = 30.0,
+        timeout: float | httpx.Timeout | None = None,
         transport: httpx.BaseTransport | None = None,
         min_interval: float | None = None,
         rate_limit_retries: int = RATE_LIMIT_RETRIES,
         rate_limit_wait: float = RATE_LIMIT_WAIT_SECONDS,
+        max_retries: int = MAX_RETRIES,
+        rpc_retries: int = RPC_RETRIES,
     ) -> None:
         self.url = url
+        if timeout is None:
+            timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
         self._http = httpx.Client(timeout=timeout, transport=transport)
+        self.max_retries = max_retries
+        self.rpc_retries = rpc_retries
         self._next_id = 0
         self._last_call: float | None = None
         self.min_interval = settings.solana_min_interval_seconds if min_interval is None else min_interval
@@ -101,14 +121,15 @@ class SolanaClient:
         """429 ile transport/5xx hatalarını sınırlı bütçelerle yeniden dener."""
         self._next_id += 1
         payload = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        rate_retries = failures = 0
+        rate_retries = failures = rpc_failures = 0
         wait = BASE_WAIT
+        rpc_wait = BASE_WAIT
         while True:
             try:
                 response = self._post(payload)
             except httpx.TransportError:
                 failures += 1
-                if failures >= MAX_RETRIES:
+                if failures >= self.max_retries:
                     raise RuntimeError(f"{method}: RPC'ye ulaşılamadı") from None
             else:
                 if response.status_code == 429:
@@ -119,16 +140,24 @@ class SolanaClient:
                     continue
                 if response.status_code in {502, 503, 504}:
                     failures += 1
-                    if failures >= MAX_RETRIES:
+                    if failures >= self.max_retries:
                         raise RuntimeError(f"{method}: HTTP {response.status_code} yeniden deneme bütçesi tükendi")
                 else:
                     response.raise_for_status()
                     data = response.json()
                     if "error" in data:
-                        raise RpcError(method, data["error"])
+                        error = RpcError(method, data["error"])
+                        if error.code in _SKIPPED_BLOCK_CODES or not _is_transient(data["error"]):
+                            raise error
+                        rpc_failures += 1
+                        if rpc_failures >= self.rpc_retries:
+                            raise error
+                        time.sleep(rpc_wait)
+                        rpc_wait = min(rpc_wait * 2, MAX_WAIT)
+                        continue
                     return data["result"]
             time.sleep(wait)
-            wait = min(wait * 2, 60.0)
+            wait = min(wait * 2, MAX_WAIT)
 
     def get_slot(self) -> int:
         return int(self.call("getSlot", []))

@@ -53,7 +53,8 @@ def test_persistent_failures_are_bounded(clock, failure):
             raise httpx.ConnectError("temporary")
         return httpx.Response(failure, json={"result": None})
     with solana.SolanaClient("http://rpc", transport=httpx.MockTransport(handle),
-                             min_interval=0, rate_limit_wait=0, rate_limit_retries=2) as client:
+                             min_interval=0, rate_limit_wait=0, rate_limit_retries=2,
+                             max_retries=3) as client:
         with pytest.raises(RuntimeError):
             client.get_slot()
     assert len(calls) == 3
