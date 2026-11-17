@@ -25,7 +25,9 @@ class FakeSolanaChain:
         latest_slot: int = 1_000,
         address_signatures: dict[str, list[dict]] | None = None,  # adres -> imzalar (yeniden eskiye)
         first_available: int = 0,
+        fill_blocks: bool = False,  # True: işlemsiz her slotta ilgisiz bir imza ("fill<slot>") vardır
     ) -> None:
+        self.fill_blocks = fill_blocks
         self.calls: list[tuple[str, list]] = []
         self.address_signatures = address_signatures
         self.first_available = first_available
@@ -63,6 +65,8 @@ class FakeSolanaChain:
         if method == "getBlock":
             slot = params[0]
             sigs = [e["signature"] for e in self._all_entries() if int(e["slot"]) == slot]
+            if not sigs and self.fill_blocks and 0 <= slot <= self.latest_slot:
+                sigs = [f"fill{slot}"]
             if not sigs:
                 raise _RpcFail(-32007, f"Slot {slot} was skipped, or missing due to ledger jump to recent snapshot")
             return {"signatures": sorted(set(sigs))}
@@ -99,6 +103,8 @@ class FakeSolanaChain:
                 cursor_slot = next(
                     (int(e["slot"]) for e in self._all_entries() if e["signature"] == before), None
                 )
+                if cursor_slot is None and before.startswith("fill"):
+                    cursor_slot = int(before[4:])
                 if cursor_slot is None:
                     raise _RpcFail(-32602, "Invalid param: before signature not found")
                 out = [e for e in out if int(e["slot"]) < cursor_slot]
