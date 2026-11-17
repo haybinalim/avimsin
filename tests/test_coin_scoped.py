@@ -60,6 +60,15 @@ def run(monkeypatch, module, path, coin, client):
     module.main()
 
 
+def win(path, *coins):
+    """Score yalnız kayıtlı pencereyi okur; bu testlerde pencere filter'sız elle yazılır."""
+    with sqlite3.connect(path) as conn:
+        for coin in coins:
+            conn.execute(
+                "INSERT OR REPLACE INTO analysis_windows VALUES (?, 1, 100000, 1)", (coin,)
+            )
+
+
 def q(path, sql, args=()):
     with sqlite3.connect(path) as conn:
         return conn.execute(sql, args).fetchall()
@@ -119,6 +128,7 @@ def test_score_reads_eligibility_from_coin_verdicts_not_legacy_field(tmp_path, m
     seed_two_coins(path)
     with sqlite3.connect(path) as conn:  # eski alan 'ok' diyor, coin kararı yok
         conn.execute("UPDATE wallets SET verdict = 'ok'")
+    win(path, C1)
     run(monkeypatch, score_cli, path, C1, Client(good(C1, SHARED)))
     assert q(path, "SELECT * FROM coin_scores") == []
 
@@ -127,6 +137,7 @@ def test_cli_prints_legacy_note_when_new_tables_empty(tmp_path, monkeypatch, cap
     path = tmp_path / "db.sqlite"
     seed_two_coins(path)
     client = Client(good(C1, SHARED))
+    win(path, C1)
     run(monkeypatch, score_cli, path, C1, client)
     assert NOTE in capsys.readouterr().out
     run(monkeypatch, filter_cli, path, C1, client)
@@ -168,6 +179,7 @@ def test_legacy_db_opens_old_data_intact_and_new_code_ignores_it(tmp_path, monke
     assert q(db, "SELECT verdict FROM wallets") == [("ok",)]
     assert q(db, "SELECT wallet, score FROM scores") == [(SHARED, 0.9)]
 
+    win(db, C1)
     run(monkeypatch, score_cli, db, C1, Client(good(C1, SHARED)))  # eski 'ok' okunmaz
     assert q(db, "SELECT * FROM coin_scores") == []
     run(monkeypatch, filter_cli, db, C1, Client(good(C1, SHARED)))

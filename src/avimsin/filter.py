@@ -1,10 +1,13 @@
 """avimsin-filter: DB'deki erken alıcıları filtre motorundan geçirir.
 
 Kararlar coin bazlıdır (coin_verdicts); yalnız verilen coin'in satırları yazılır.
+Tarama aralığı kalıcı analiz penceresidir (analysis_windows, bkz. window.py);
+pencereyi yalnız filter oluşturur/genişletir/günceller, score aynı kaydı salt-okur kullanır. İlk çalıştırmada ANALYSIS_WINDOW_SECONDS (24 saat) kadar
+blok/slot hedeflenir; süresi dolmamışsa eksik kaydedilir ve sonra tamamlanır.
 
 Kullanım::
 
-    uv run avimsin-filter <coin-adresi> [--from-block <blok>] [--db <yol>]
+    uv run avimsin-filter <coin-adresi> [--from-block <blok>] [--to-block <blok>] [--db <yol>]
 """
 
 from __future__ import annotations
@@ -25,6 +28,7 @@ from .storage.db import (
     save_verdict,
     set_chain,
 )
+from .window import resolve_window
 
 
 def _is_contract(client: ChainClient, wallet: str) -> bool:
@@ -42,10 +46,14 @@ def main() -> None:
         "--from-block",
         type=int,
         default=None,
-        help="Transfer taraması başlangıcı (varsayılan: coin'in kayıtlı ilk bloğu)",
+        help="Transfer taraması başlangıcı; verilirse kalıcı pencereyi günceller "
+        "(varsayılan: kayıtlı pencere, yoksa coin'in ilk bloğu). --to-block verilmezse "
+        "bitiş yeni başlangıçtan yeniden hesaplanır (24 saatlik hedef), eski bitiş korunmaz",
     )
     parser.add_argument(
-        "--to-block", type=int, default=None, help="Tarama bitişi (varsayılan: en güncel blok)"
+        "--to-block", type=int, default=None,
+        help="Tarama bitişi; verilirse kalıcı pencereyi günceller, en güncel bloktan büyükse hata "
+        "(varsayılan: kalıcı pencere; yoksa ANALYSIS_WINDOW_SECONDS uzunluğunda)",
     )
     parser.add_argument(
         "--chain", default=None, choices=["robinhood", "solana"],
@@ -61,16 +69,6 @@ def main() -> None:
             chain = check_coin_chain(conn, coin, args.chain)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if args.from_block is None:
-            row = conn.execute(
-                "SELECT first_block FROM coins WHERE address = ?", (coin,)
-            ).fetchone()
-            if row is None:
-                raise SystemExit(f"{coin} veritabanında yok; önce avimsin-scan çalıştırın.")
-            from_block = row[0]
-        else:
-            from_block = args.from_block
-
         wallets = [
             r[0]
             for r in conn.execute(
@@ -84,8 +82,12 @@ def main() -> None:
             print(LEGACY_NOTE)
 
         with open_chain(chain) as client:
-            to_block = args.to_block if args.to_block is not None else client.block_number()
-            events = client.token_transfers(coin, from_block, to_block)
+            window = resolve_window(
+                conn, coin, chain, client.block_number, args.from_block, args.to_block
+            )
+            for line in window.notes:
+                print(line)
+            events = client.token_transfers(coin, window.from_block, window.to_block)
             histories: dict[str, WalletHistory] = {}
             for wallet in wallets:
                 relevant = [e for e in events if e.frm == wallet or e.to == wallet]

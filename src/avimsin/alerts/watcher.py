@@ -18,7 +18,6 @@ tur aynı sinyali yeniden dener (pencere dışına düşerse kaybolur — biline
 from __future__ import annotations
 
 import json
-import math
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -28,7 +27,7 @@ import httpx
 from ..chains.protocol import ChainClient
 from ..collectors.transfers import ZERO_ADDRESS, TransferEvent
 from ..config import settings
-from ..filters.chains import BLOCK_INTERVAL_SECONDS, normalize_chain
+from ..filters.chains import blocks_for_seconds, normalize_chain
 from .telegram import TelegramClient
 
 
@@ -114,7 +113,7 @@ def format_signal(signal: Signal, threshold: int) -> str:
 
 def _blocks_for(seconds: int, chain: str) -> int:
     """Süreyi zincirin blok/slot sayısına çevirir (zaman damgası RPC'den çekilmez)."""
-    return max(1, math.ceil(seconds / BLOCK_INTERVAL_SECONDS[chain]))
+    return blocks_for_seconds(seconds, chain)
 
 
 def _load_cursor(conn: sqlite3.Connection, chain: str) -> int | None:

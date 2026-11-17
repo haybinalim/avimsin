@@ -2,10 +2,14 @@
 
 Sonuçlar coin bazlıdır: uygunluk coin_verdicts'ten (o coin, verdict=ok) okunur,
 skorlar coin_scores'ta yalnız bu coin için atomik yenilenir.
+Tarama aralığı filter'ın yazdığı kalıcı analiz penceresidir (analysis_windows, bkz.
+window.py). score pencereyi yalnız OKUR: genişletmez, yazmaz; kayıt yoksa RPC'den önce
+hata verir. Açık --from-block/--to-block kayıtla uyuşmuyorsa hata verir (pencereyi
+avimsin-filter değiştirir).
 
 Kullanım::
 
-    uv run avimsin-score <coin-adresi> [--from-block <blok>] [--db <yol>]
+    uv run avimsin-score <coin-adresi> [--from-block <blok>] [--to-block <blok>] [--db <yol>]
 """
 
 from __future__ import annotations
@@ -23,6 +27,7 @@ from .storage.db import (
     check_coin_chain,
     clear_coin_scores,
     has_coin_results,
+    load_window,
     normalize_address,
     save_score,
     set_chain,
@@ -39,10 +44,13 @@ def main() -> None:
         "--from-block",
         type=int,
         default=None,
-        help="Transfer taraması başlangıcı (varsayılan: coin'in kayıtlı ilk bloğu)",
+        help="Yalnız doğrulama: kayıtlı pencerenin başlangıcıyla aynı olmalı; değilse hata "
+        "(pencereyi avimsin-filter değiştirir)",
     )
     parser.add_argument(
-        "--to-block", type=int, default=None, help="Tarama bitişi (varsayılan: en güncel blok)"
+        "--to-block", type=int, default=None,
+        help="Yalnız doğrulama: kayıtlı pencerenin bitişiyle aynı olmalı; değilse hata "
+        "(pencereyi avimsin-filter değiştirir)",
     )
     parser.add_argument(
         "--chain", default=None, choices=["robinhood", "solana"],
@@ -58,16 +66,20 @@ def main() -> None:
             chain = check_coin_chain(conn, coin, args.chain)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if args.from_block is None:
-            row = conn.execute(
-                "SELECT first_block FROM coins WHERE address = ?", (coin,)
-            ).fetchone()
-            if row is None:
-                raise SystemExit(f"{coin} veritabanında yok; önce avimsin-scan çalıştırın.")
-            from_block = row[0]
-        else:
-            from_block = args.from_block
-
+        # Pencereyi YALNIZ filter yazar; score salt-okur (kararlar o aralığa dayanır).
+        stored = load_window(conn, coin)
+        if stored is None:
+            raise SystemExit("Analiz penceresi yok; önce avimsin-filter çalıştırın.")
+        if (args.from_block is not None and args.from_block != stored[0]) or (
+            args.to_block is not None and args.to_block != stored[1]
+        ):
+            new_from = args.from_block if args.from_block is not None else stored[0]
+            new_to = args.to_block if args.to_block is not None else stored[1]
+            raise SystemExit(
+                f"Pencere filter ile değiştirilir: avimsin-filter {coin} "
+                f"--from-block {new_from} --to-block {new_to} "
+                f"(kayıtlı pencere {stored[0]}–{stored[1]})"
+            )
         wallets = conn.execute(
             "SELECT DISTINCT p.wallet FROM purchases p WHERE p.coin = ? ORDER BY p.block",
             (coin,),
@@ -90,11 +102,16 @@ def main() -> None:
             "SELECT 1 FROM coin_verdicts WHERE coin = ? LIMIT 1", (coin,)
         ).fetchone() is None:
             print(f"NOT: {coin} için coin_verdicts yok; önce avimsin-filter {coin} çalıştırın.")
+        state = "tam" if stored[2] else "eksik"
+        print(f"Analiz penceresi: {stored[0]}–{stored[1]} ({state})")
+        if not stored[2]:
+            print(
+                "UYARI: pencere eksik; tamamlamak için önce avimsin-filter'ı yeniden çalıştırın"
+            )
         scores = []
         if eligible:
             with open_chain(chain) as client:
-                to_block = args.to_block if args.to_block is not None else client.block_number()
-                events = client.token_transfers(coin, from_block, to_block)
+                events = client.token_transfers(coin, stored[0], stored[1])
                 token_unit = 10 ** client.decimals(coin)
 
             for wallet in eligible:
