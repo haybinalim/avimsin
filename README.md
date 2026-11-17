@@ -72,7 +72,7 @@ Açılışta ilk `block_number` hatası süreci düşürür (systemd yeniden ba�
 
 ## Vizyon
 
-Örnek senaryo: popüler bir ağda (örn. Robinhood Chain) bir meme coin çok yükselir.
+Önce Solana, sonra Robinhood ve diğer EVM ağları. Örnek senaryo: popüler bir ağda (önce Solana; sonra örn. Robinhood Chain) bir meme coin çok yükselir.
 Avımsın o coini **ilk alan 50 cüzdanı** bulur; içinden:
 
 - **Botları** tespit edip listeden çıkarır,
@@ -88,11 +88,11 @@ belirleyeceğiniz eşik, ör. 3 veya 5) bir coin aldığında **Telegram bildiri
 | Faz | İçerik | Durum |
 |-----|--------|-------|
 | 0 | Repo kurulumu, Python ortamı, mimari iskelet | ✅ |
-| 1 | Veri katmanı: erken alıcılar + transfer/swap geçmişi (Robinhood Chain, EVM RPC) | ✅ (erken alıcılar; swap geçmişi Faz 2'de) |
+| 1 | Veri katmanı: erken alıcılar + transfer/swap geçmişi (Solana öncelikli; Robinhood Chain/EVM RPC desteği korunur) | ✅ (erken alıcılar; swap geçmişi Faz 2'de) |
 | 2 | Filtre motoru: bot tespiti, kaçak satış kuralları (büyüyebilir kural seti) | ✅ (fiyat-bağımsız kurallar; P&L bazlı zenginleştirme Faz 3'te) |
 | 3 | Skorlama & sıralama: kazanma oranı, P&L, işlem sıklığı | ✅ (fiyat-bağımsız; USD P&L Faz 4+ta) |
 | 4 | Streamlit paneli: smart wallet listesini tarayıcıda görüntüleme | ✅ (`uv run streamlit run dashboard/app.py`) |
-| 6 | Oracle Free VPS'e 7/24 dağıtım (systemd) + Solana ve diğer EVM ağları | ⏳ (VPS paketi: `deploy/` — kurulum `deploy/README.md`; Solana: `--chain solana`) |
+| 6 | Oracle Free VPS'e 7/24 dağıtım (systemd) + önce Solana, sonra Robinhood ve diğer EVM ağları | ⏳ (VPS paketi: `deploy/` — kurulum `deploy/README.md`; varsayılan zincir Solana, EVM: `--chain robinhood`) |
 
 ## Mimari
 
@@ -118,18 +118,20 @@ Kod ağ-bağımsız yazılır; EVM ağları ve Solana aynı arayüzü kullanır.
 cd ~/Projects/avimsin
 uv sync                # Python 3.12 sanal ortamını kurar, bağımlılıkları yükler
 uv run avimsin-rpc     # RPC uçlarını sıralı ölçer; aynı ağ içinde karşılaştırır
-uv run avimsin-scan <token> --from-block <blok>   # erken alıcıları topla, SQLite'a yaz
-uv run avimsin-filter <token>   # alıcıları bot/kaçak satış kurallarından geçir
-uv run avimsin-score <token>    # temiz cüzdanları winrate/P&L/frekans ile sırala
-uv run avimsin-watch          # sinyal izleyici (Telegram'a bildirir)
+uv run avimsin-scan <mint> --from-block <slot>   # Solana (varsayılan): erken alıcıları topla
+uv run avimsin-filter <mint>    # alıcıları bot/kaçak satış kurallarından geçir
+uv run avimsin-score <mint>     # temiz cüzdanları winrate/P&L/frekans ile sırala
+uv run avimsin-watch            # sinyal izleyici (Telegram'a bildirir; varsayılan solana)
+uv run avimsin-scan 0x<kontrat> --chain robinhood --from-block <blok>   # EVM örneği
 uv run pytest                 # test ağı (sahte EVM/Solana zincirleri, ağ yok)
 ```
 
 `scan/filter/score/watch` komutları `--chain robinhood|solana` bayrağıyla zincir
-seçer (varsayılan `robinhood`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
+seçer (varsayılan `solana`); Solana ucu `.env`'de `RPC_SOLANA_*` ile verilir,
 verilmezse public devnet ucu kullanılır.
 
-Kayıtlı zincir ile `--chain` uyuşmazsa scan/filter/score RPC sorgusundan önce
+`0x` EVM adresi `--chain robinhood` olmadan verilirse (ya da base58 adres
+`robinhood` ile) RPC sorgusundan önce net hata verilir. Kayıtlı zincir ile `--chain` uyuşmazsa scan/filter/score RPC sorgusundan önce
 durur. Zinciri bilinmeyen eski kayıtlarda `--chain` açıkça verilmelidir;
 başarılı işlemde kayıt tamamlanır. Watch bilinmeyen zincirli coinleri atlar.
 
