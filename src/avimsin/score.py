@@ -1,5 +1,8 @@
 """avimsin-score: filtrelenmiş cüzdanları transfer verisiyle skorlar ve sıralar.
 
+Sonuçlar coin bazlıdır: uygunluk coin_verdicts'ten (o coin, verdict=ok) okunur,
+skorlar coin_scores'ta yalnız bu coin için atomik yenilenir.
+
 Kullanım::
 
     uv run avimsin-score <coin-adresi> [--from-block <blok>] [--db <yol>]

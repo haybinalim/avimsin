@@ -9,6 +9,8 @@ Dayanıklılık (SQLite, zincir anahtarlı):
 - ``watch_inflows``: pencere içindeki girişler (turlar arası birikim).
 - ``watch_alerts``: bildirilen cüzdanlar. Aynı küme tekrar gönderilmez; yeni cüzdan
   katılırsa "güncelleme" gider; ilk tam sinyalden ``WATCH_ALERT_COOLDOWN_SECONDS`` sonra coin sıfırlanır.
+Smart wallet kümesi coin bazlı kararlardan (``coin_verdicts``) türetilir:
+``smart_wallets_for_chain``. Küme boşsa uyarı yazılır (ilk tur, dolu→boş geçişi).
 Teslimat durumdan türetilir: gönderim hatası alert kaydı yazılmadan kalır, sonraki
 tur aynı sinyali yeniden dener (pencere dışına düşerse kaybolur — bilinen sınır).
 """

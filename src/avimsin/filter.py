@@ -1,5 +1,7 @@
 """avimsin-filter: DB'deki erken alıcıları filtre motorundan geçirir.
 
+Kararlar coin bazlıdır (coin_verdicts); yalnız verilen coin'in satırları yazılır.
+
 Kullanım::
 
     uv run avimsin-filter <coin-adresi> [--from-block <blok>] [--db <yol>]

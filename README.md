@@ -34,16 +34,27 @@ Telegram'dan haber verir.
 Bu sürüm transfer tabanlı bir göstergedir: token girişi doğrulanmış satın alma,
 token çıkışı satış değildir. Dump kuralı ilk geçerli girişten başlayan pencerede
 pozitif çıkış/giriş **miktarını** karşılaştırır; fiyat ve zarar koşulu henüz yoktur.
-Skorun oranı ekonomik winrate, net token akışı finansal P&L değildir. Skor/karar
-kayıtları hâlâ cüzdan genelindedir; farklı coinlerde ortak cüzdan sonuçları
-birbirini etkileyebilir. Gerçek swap, maliyet ve coin bazlı sonuç modeli eksiktir.
+Skorun oranı ekonomik winrate, net token akışı finansal P&L değildir. Gerçek swap
+ve maliyet modeli eksiktir.
 
-`score` yalnız `verdict=ok` cüzdanları işler; yeniden çalıştırma bu coin'in
-alıcılarına ait eski skorları atomik yeniler (çıktısız/uygunsuz olanları kaldırır).
+**Karar ve skor coin bazlıdır:** `coin_verdicts(coin, wallet, ...)` ve
+`coin_scores(coin, wallet, ...)` tabloları. `avimsin-filter <coin>` ve
+`avimsin-score <coin>` yalnız o coin'in satırlarını yazar/yeniler; başka coin'deki
+sonuçlara dokunmaz. Eski `wallets.verdict*` kolonları ve `scores` tablosu silinmedi
+ama artık yazılmaz ve okunmaz; eski global kayıtların coin bilgisi yoktur, taşınmaz.
+Eski bir veritabanında yeni tablolar boşken CLI ve panel bunu belirten bir not
+gösterir: `avimsin-filter` ve `avimsin-score`'u her coin için yeniden çalıştırın.
+
+`score` uygunluğu o coin'in `coin_verdicts` kaydından (`verdict=ok`) okur; yeniden
+çalıştırma yalnız bu coin'in skorlarını atomik yeniler (çıktısız/uygunsuz olanları
+kaldırır). Uygun olmayan bir karar yalnız o coin'in skorunu siler.
 Boş filtre geçmişi temiz sayılmaz. CLI token birimi gösterir; DB'deki net akış
 tam tokene yuvarlanır, panel hassasiyeti bu aşamada düzeltilmiş değildir.
 
-`watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Mint/burn,
+`watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Smart wallet: seçili zincirde en az bir coin'de `verdict=ok`
+olan ve o zincirin hiçbir coin'inde `verdict=bot` olmayan cüzdan (dump coin'e özgüdür,
+tek başına dışlamaz; zinciri NULL coinler sayılmaz). Küme boşsa log'a uyarı yazılır
+(ilk turda ve dolu→boş geçişinde). Mint/burn,
 sıfır/negatif ve öz-transferler sayılmaz. Cursor kalıcıdır (`watch_cursor`):
 yeniden başlatmada kesinti taranır; `WATCH_MAX_SLOTS_PER_POLL` aşılırsa aralık
 atlanır (log satırı) ve cursor güncele çekilir. Eşik, son
