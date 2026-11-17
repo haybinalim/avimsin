@@ -58,10 +58,12 @@ zincirin blok süresiyle (Solana 0.4 sn, Robinhood 0.25 sn) bloğa çevrilir:
 `to = from + pencere`. Hedef en güncel bloğu aşarsa pencere orada kesilir, `complete=0`
 kaydedilir ve çıktıya `UYARI: pencere eksik (… / … blok)` yazılır; sonraki çalıştırmada
 yetişilmişse hedefe genişler ve `complete=1` olur. `complete=1` pencere bir daha kaymaz.
-Açık `--from-block`/`--to-block` kaydı günceller (`Pencere güncellendi: eski → yeni`);
-`--to-block` en güncel bloktan büyükse hata verilir. Sonuçlar yalnız o pencerenin verisine
-dayanır; eksik pencerede skorlar da eksik veriyle hesaplanmıştır. `avimsin-score`
-uygun cüzdan yoksa ağa çıkmaz ve pencereyi çözmez. `avimsin-scan` pencereye dokunmaz.
+Pencereyi yalnız `avimsin-filter` oluşturur, genişletir ve günceller; `avimsin-score` salt-okurdur
+(kayıt yoksa RPC'den önce hata; eksik pencerede kayıtlı aralıkla çalışır ve uyarır; kayıtla
+uyuşmayan açık `--from-block`/`--to-block` hatadır). Filter'da açık `--from-block`/`--to-block`
+kaydı günceller (`Pencere güncellendi: eski → yeni`); yalnız `--from-block` verilirse bitiş yeni
+başlangıçtan yeniden hesaplanır (eski bitiş korunmaz); `--to-block` en güncel bloktan büyükse hata verilir. Sonuçlar yalnız o pencerenin verisine
+dayanır; eksik pencerede skorlar da eksik veriyle hesaplanmıştır. `avimsin-scan` pencereye dokunmaz.
 
 `watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Smart wallet: seçili zincirde en az bir coin'de `verdict=ok`
 olan ve o zincirin hiçbir coin'inde `verdict=bot` olmayan cüzdan (dump coin'e özgüdür,

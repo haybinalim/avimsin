@@ -2,7 +2,7 @@
 
 Kararlar coin bazlıdır (coin_verdicts); yalnız verilen coin'in satırları yazılır.
 Tarama aralığı kalıcı analiz penceresidir (analysis_windows, bkz. window.py);
-score aynı pencereyi okur. İlk çalıştırmada ANALYSIS_WINDOW_SECONDS (24 saat) kadar
+pencereyi yalnız filter oluşturur/genişletir/günceller, score aynı kaydı salt-okur kullanır. İlk çalıştırmada ANALYSIS_WINDOW_SECONDS (24 saat) kadar
 blok/slot hedeflenir; süresi dolmamışsa eksik kaydedilir ve sonra tamamlanır.
 
 Kullanım::
@@ -20,7 +20,6 @@ from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
 from .filters.dump_rules import DumpRule
 from .storage.db import connect as db_connect
-from .window import resolve_window
 from .storage.db import (
     LEGACY_NOTE,
     check_coin_chain,
@@ -29,6 +28,7 @@ from .storage.db import (
     save_verdict,
     set_chain,
 )
+from .window import resolve_window
 
 
 def _is_contract(client: ChainClient, wallet: str) -> bool:
@@ -47,7 +47,8 @@ def main() -> None:
         type=int,
         default=None,
         help="Transfer taraması başlangıcı; verilirse kalıcı pencereyi günceller "
-        "(varsayılan: kayıtlı pencere, yoksa coin'in ilk bloğu)",
+        "(varsayılan: kayıtlı pencere, yoksa coin'in ilk bloğu). --to-block verilmezse "
+        "bitiş yeni başlangıçtan yeniden hesaplanır (24 saatlik hedef), eski bitiş korunmaz",
     )
     parser.add_argument(
         "--to-block", type=int, default=None,

@@ -159,11 +159,72 @@ def test_explicit_blocks_update_record_and_report(tmp_path, monkeypatch, capsys)
     assert client.calls == [(2000, 3000)]
     assert window(path, "solana") == (2000, 3000, True)
     assert f"Pencere güncellendi: {FIRST}–{FIRST + DAY['solana']} (tam) → 2000–3000 (tam)" in out
-    # Sonraki argümansız çalıştırma yeni kaydı kullanır.
+    # Sonraki argümansız score yeni kaydı kullanır.
     make_eligible(path, "solana")
     client = Client(99_999_999)
     run(monkeypatch, score_cli, path, "solana", client)
     assert client.calls == [(2000, 3000)]
+
+
+def test_boundary_goal_equals_latest_is_complete(tmp_path, monkeypatch):
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    run(monkeypatch, filter_cli, path, "solana", Client(FIRST + DAY["solana"]))
+    assert window(path, "solana") == (FIRST, FIRST + DAY["solana"], True)
+
+
+def test_score_does_not_extend_incomplete_window(tmp_path, monkeypatch, capsys):
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    run(monkeypatch, filter_cli, path, "solana", Client(FIRST + 1000))
+    assert window(path, "solana") == (FIRST, FIRST + 1000, False)
+    make_eligible(path, "solana")
+    capsys.readouterr()
+    client = Client(FIRST + DAY["solana"] * 3)  # latest çok ilerledi
+    run(monkeypatch, score_cli, path, "solana", client)
+    out = capsys.readouterr().out
+    assert client.calls == [(FIRST, FIRST + 1000)]
+    assert window(path, "solana") == (FIRST, FIRST + 1000, False)
+    assert "UYARI: pencere eksik; tamamlamak için önce avimsin-filter'ı yeniden çalıştırın" in out
+
+
+def test_score_without_window_errors_before_rpc(tmp_path, monkeypatch):
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    make_eligible(path, "solana")
+    client = Client(FIRST + 10)
+    with pytest.raises(SystemExit) as exc:
+        run(monkeypatch, score_cli, path, "solana", client)
+    assert "Analiz penceresi yok; önce avimsin-filter çalıştırın." in str(exc.value)
+    assert client.calls == []
+    assert window(path, "solana") is None
+
+
+@pytest.mark.parametrize("eligible", [True, False])
+@pytest.mark.parametrize("args", [("--from-block", "5"), ("--to-block", "5")])
+def test_score_rejects_mismatching_explicit_args(tmp_path, monkeypatch, args, eligible):
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    run(monkeypatch, filter_cli, path, "solana", Client(FIRST + DAY["solana"] + 1))
+    if eligible:
+        make_eligible(path, "solana")
+    client = Client(FIRST + DAY["solana"] + 1)
+    with pytest.raises(SystemExit) as exc:
+        run(monkeypatch, score_cli, path, "solana", client, *args)
+    assert "Pencere filter ile değiştirilir: avimsin-filter" in str(exc.value)
+    assert client.calls == []
+    assert window(path, "solana") == (FIRST, FIRST + DAY["solana"], True)
+
+
+def test_score_accepts_matching_explicit_args(tmp_path, monkeypatch):
+    path = tmp_path / "a.sqlite"
+    seed(path, "solana")
+    run(monkeypatch, filter_cli, path, "solana", Client(FIRST + DAY["solana"] + 1))
+    make_eligible(path, "solana")
+    client = Client(FIRST + DAY["solana"] + 1)
+    run(monkeypatch, score_cli, path, "solana", client,
+        "--from-block", str(FIRST), "--to-block", str(FIRST + DAY["solana"]))
+    assert client.calls == [(FIRST, FIRST + DAY["solana"])]
 
 
 def test_explicit_to_block_beyond_latest_errors(tmp_path, monkeypatch):

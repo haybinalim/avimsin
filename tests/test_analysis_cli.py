@@ -12,7 +12,7 @@ from avimsin import filter as filter_cli
 from avimsin import scan as scan_cli
 from avimsin import score as score_cli
 from avimsin.collectors.transfers import TransferEvent
-from avimsin.storage.db import connect, save_coin, save_purchase, save_score, save_verdict
+from avimsin.storage.db import connect, save_coin, save_purchase, save_score, save_verdict, save_window
 
 COIN = "0x" + "ab" * 20
 OTHER_COIN = "0x" + "cd" * 20
@@ -45,6 +45,7 @@ def seed(path, chain="robinhood"):
     conn = connect(path)
     with conn:
         save_coin(conn, COIN, 1)
+        save_window(conn, COIN, 1, 1000, True)
         # Ham yazım: uyumsuz zincir senaryosu adres korumasını aşmalı.
         conn.execute("UPDATE coins SET chain = ? WHERE address = ?", (chain, COIN))
         for wallet, verdict in [(CLEAN, "ok"), (BOT, "bot"), (DUMP, "dump"), (UNKNOWN, None)]:
@@ -137,7 +138,9 @@ def test_score_lists_only_clean_and_replaces_stale_window(tmp_path, monkeypatch,
     assert score_wallets(path) == [CLEAN, OUTSIDE]
     assert [row for row in rows(path, "coin_scores") if row[1] == OUTSIDE] == outside_before
 
-    invoke(monkeypatch, score_cli, path, "--to-block", "100")
+    with sqlite3.connect(path) as conn:  # pencereyi filter daraltmış gibi kayıt
+        conn.execute("UPDATE analysis_windows SET to_block = 100 WHERE coin = ?", (COIN,))
+    invoke(monkeypatch, score_cli, path)
     assert CLEAN not in capsys.readouterr().out
     assert rows(path, "coin_scores") == outside_before
 
