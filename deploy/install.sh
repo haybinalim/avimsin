@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # Avımsın VPS kurulumu — Oracle Free Tier (Ubuntu 22.04) varsayımıyla.
-# Kullanım: sudo ./deploy/install.sh [--app-dir /opt/avimsin] [--chain robinhood] [--user ubuntu]
+# Kullanım: sudo ./deploy/install.sh [--app-dir /opt/avimsin] [--chain solana|robinhood] [--user ubuntu]
 # İdempotent: tekrar çalıştırılabilir; mevcut .env ve DB'ye dokunmaz.
 set -euo pipefail
 
 APP_DIR="/opt/avimsin"
-CHAIN="robinhood"
+CHAIN="solana"
 SVC_USER="$(logname 2>/dev/null || echo ubuntu)"
 
 while [[ $# -gt 0 ]]; do

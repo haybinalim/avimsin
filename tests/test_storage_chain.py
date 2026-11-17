@@ -220,3 +220,55 @@ def test_with_chain_fills_nulls_without_mutating_input() -> None:
     filled = with_chain(frame)
     assert filled["chain"].tolist()[-1] == UNKNOWN_CHAIN
     assert frame["chain"].isna().sum() == 1  # orijinal bozulmadı
+
+def test_default_cli_chain_is_solana_and_library_default_unchanged() -> None:
+    from avimsin.chains import DEFAULT_CLI_CHAIN
+    from avimsin.filters.chains import DEFAULT_CHAIN
+
+    conn = connect(":memory:")
+    try:
+        assert DEFAULT_CLI_CHAIN == "solana"
+        assert check_coin_chain(conn, SOL_COIN, None) == "solana"
+        assert DEFAULT_CHAIN == "robinhood"  # kütüphane sözleşmesi (PR #19) değişmez
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize(
+    ("address", "chain"),
+    [(EVM_COIN, None), (EVM_COIN, "solana"), ("0X" + EVM_COIN[2:], "solana"), (SOL_COIN, "robinhood")],
+)
+def test_address_chain_mismatch_fails_before_any_write(address, chain) -> None:
+    conn = connect(":memory:")
+    try:
+        with pytest.raises(ValueError, match="--chain"):
+            check_coin_chain(conn, address, chain)
+        with pytest.raises(ValueError):
+            save_coin(conn, address, 1, chain=chain or "solana")
+        assert coin_chains(conn) == {}
+    finally:
+        conn.close()
+
+
+def test_address_chain_matches_pass() -> None:
+    conn = connect(":memory:")
+    try:
+        assert check_coin_chain(conn, EVM_COIN, "robinhood") == "robinhood"
+        assert check_coin_chain(conn, SOL_COIN, "solana") == "solana"
+    finally:
+        conn.close()
+
+
+def test_registered_chain_used_when_chain_omitted() -> None:
+    conn = connect(":memory:")
+    try:
+        save_coin(conn, EVM_COIN, 1, chain="robinhood")
+        save_coin(conn, SOL_COIN, 2, chain="solana")
+        assert check_coin_chain(conn, EVM_COIN, None) == "robinhood"
+        assert check_coin_chain(conn, SOL_COIN, None) == "solana"
+        with pytest.raises(ValueError):  # açık --chain uyuşmazlığı korunur
+            check_coin_chain(conn, EVM_COIN, "solana")
+        with pytest.raises(ValueError, match="--chain robinhood"):  # kayıtsız 0x
+            check_coin_chain(conn, "0x" + "cd" * 20, None)
+    finally:
+        conn.close()

@@ -44,7 +44,9 @@ class Client:
 def seed(path, chain="robinhood"):
     conn = connect(path)
     with conn:
-        save_coin(conn, COIN, 1, chain)
+        save_coin(conn, COIN, 1)
+        # Ham yazım: uyumsuz zincir senaryosu adres korumasını aşmalı.
+        conn.execute("UPDATE coins SET chain = ? WHERE address = ?", (chain, COIN))
         for wallet, verdict in [(CLEAN, "ok"), (BOT, "bot"), (DUMP, "dump"), (UNKNOWN, None)]:
             save_purchase(conn, COIN, wallet, 1, wallet)
             save_verdict(conn, COIN, wallet, verdict, "-", "seed")
@@ -66,6 +68,8 @@ def score_wallets(path):
 
 
 def invoke(monkeypatch, module, path, *args):
+    if "--chain" not in args:  # fikstür EVM adresi; varsayılan solana korumaya takılır
+        args = (*args, "--chain", "robinhood")
     monkeypatch.setattr(sys, "argv", [module.__name__, COIN, "--db", str(path), *args])
     module.main()
 
@@ -110,12 +114,13 @@ def test_legacy_chain_requires_explicit_selection(tmp_path, monkeypatch, module)
 
     monkeypatch.setattr(module, "open_chain", open_client)
     with pytest.raises(SystemExit):
-        invoke(monkeypatch, module, path, "--from-block", "1")
+        monkeypatch.setattr(sys, "argv", [module.__name__, COIN, "--db", str(path), "--from-block", "1"])
+        module.main()  # --chain yok: legacy NULL zincir açık seçim ister
     assert rpc_calls == []
     assert rows(path, "coins")[0][2] is None
-    invoke(monkeypatch, module, path, "--from-block", "1", "--chain", "solana")
-    assert rpc_calls == ["solana"]
-    assert rows(path, "coins")[0][2] == "solana"
+    invoke(monkeypatch, module, path, "--from-block", "1", "--chain", "robinhood")
+    assert rpc_calls == ["robinhood"]
+    assert rows(path, "coins")[0][2] == "robinhood"
 
 
 def test_score_lists_only_clean_and_replaces_stale_window(tmp_path, monkeypatch, capsys):
@@ -197,3 +202,37 @@ def test_failed_filter_refresh_preserves_verdicts_and_scores(tmp_path, monkeypat
     with pytest.raises(sqlite3.IntegrityError):
         invoke(monkeypatch, filter_cli, path, "--chain", "robinhood")
     assert {table: rows(path, table) for table in before} == before
+
+
+@pytest.mark.parametrize("module", [scan_cli, filter_cli, score_cli])
+def test_evm_address_without_chain_fails_before_rpc(tmp_path, monkeypatch, module):
+    rpc_calls = []
+    monkeypatch.setattr(module, "open_chain", lambda chain: rpc_calls.append(chain))
+    monkeypatch.setattr(
+        sys, "argv", [module.__name__, COIN, "--db", str(tmp_path / "x.sqlite"), "--from-block", "1"]
+    )
+    with pytest.raises(SystemExit) as exc:
+        module.main()
+    assert "--chain robinhood" in str(exc.value)
+    assert rpc_calls == []
+
+
+def test_watch_defaults_to_solana(monkeypatch):
+    from avimsin import watch as watch_cli
+
+    seen = []
+
+    class Ctx:
+        def __enter__(self):
+            return object()
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(watch_cli, "open_chain", lambda c: seen.append(c) or Ctx())
+    monkeypatch.setattr(watch_cli, "watch_loop", lambda *a, **k: 0)
+    monkeypatch.setattr(watch_cli, "TelegramClient", lambda: object())
+    monkeypatch.setattr(watch_cli, "db_connect", lambda p: connect(":memory:"))
+    monkeypatch.setattr(sys, "argv", ["avimsin-watch", "--once"])
+    watch_cli.main()
+    assert seen == ["solana"]

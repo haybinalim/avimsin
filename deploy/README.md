@@ -8,9 +8,9 @@ Kaynak kod değişikliği yok — bu klasör kurulum + servis dosyalarıdır.
 ```bash
 git clone https://github.com/haybinalim/avimsin.git /tmp/avimsin-src
 cd /tmp/avimsin-src
-sudo ./deploy/install.sh                      # varsayılan: /opt/avimsin, robinhood
-# ya da:
-sudo ./deploy/install.sh --app-dir /opt/avimsin --chain solana --user ubuntu
+sudo ./deploy/install.sh                      # varsayılan: /opt/avimsin, solana
+# ya da (EVM, Solana bitince):
+sudo ./deploy/install.sh --app-dir /opt/avimsin --chain robinhood --user ubuntu
 ```
 
 Script şunları yapar (idempotent, tekrar koşulabilir):
@@ -56,5 +56,5 @@ journalctl -u avimsin-watch -e --no-pager | tail -50
   `systemctl stop` ile durdurup yedekleyin).
 - Public RPC rate limit kovası paylaşımlı: VPS'te tek servis koşar; geliştirici
   makinesinden aynı uca paralel tarama yapmayın (PR #13-#16 dersi).
-- Solana izlenecekse `.env`'de `RPC_SOLANA_MAINNET` zorunlu — devnet varsayılanı
+- Varsayılan zincir Solana: `.env`'de `RPC_SOLANA_MAINNET` zorunlu — devnet varsayılanı
   üretimde kullanılmaz.
