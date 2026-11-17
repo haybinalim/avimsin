@@ -30,6 +30,9 @@ class Settings:
     watch_signal_window_seconds: int = 3600
     # Bildirimden sonra aynı coin için bu süre yalnız yeni cüzdanlar güncelleme getirir.
     watch_alert_cooldown_seconds: int = 86400
+    # filter/score'un kalıcı analiz penceresi uzunluğu (saniye); blok/slot sayısına
+    # filters/chains.py BLOCK_INTERVAL_SECONDS ile çevrilir.
+    analysis_window_seconds: int = 86400
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -51,6 +54,7 @@ class Settings:
             watch_signal_window_seconds=int(
                 os.environ.get("WATCH_SIGNAL_WINDOW_SECONDS", "3600")
             ),
+            analysis_window_seconds=int(os.environ.get("ANALYSIS_WINDOW_SECONDS", "86400")),
             watch_alert_cooldown_seconds=int(
                 os.environ.get("WATCH_ALERT_COOLDOWN_SECONDS", "86400")
             ),

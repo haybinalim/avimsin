@@ -2,10 +2,13 @@
 
 Sonuçlar coin bazlıdır: uygunluk coin_verdicts'ten (o coin, verdict=ok) okunur,
 skorlar coin_scores'ta yalnız bu coin için atomik yenilenir.
+Tarama aralığı filter'ın yazdığı kalıcı analiz penceresidir (analysis_windows, bkz.
+window.py); kayıt yoksa aynı kurallarla oluşturulur. Uygun cüzdan yoksa ağa çıkılmaz
+ve pencere çözülmez.
 
 Kullanım::
 
-    uv run avimsin-score <coin-adresi> [--from-block <blok>] [--db <yol>]
+    uv run avimsin-score <coin-adresi> [--from-block <blok>] [--to-block <blok>] [--db <yol>]
 """
 
 from __future__ import annotations
@@ -17,6 +20,7 @@ from .chains import open_chain
 from .filters.base import WalletHistory
 from .scoring.engine import rank, score_wallet
 from .storage.db import connect as db_connect
+from .window import resolve_window
 from .storage.db import (
     LEGACY_NOTE,
     VERDICT_OK,
@@ -39,10 +43,13 @@ def main() -> None:
         "--from-block",
         type=int,
         default=None,
-        help="Transfer taraması başlangıcı (varsayılan: coin'in kayıtlı ilk bloğu)",
+        help="Transfer taraması başlangıcı; verilirse kalıcı pencereyi günceller "
+        "(varsayılan: kayıtlı pencere, yoksa coin'in ilk bloğu)",
     )
     parser.add_argument(
-        "--to-block", type=int, default=None, help="Tarama bitişi (varsayılan: en güncel blok)"
+        "--to-block", type=int, default=None,
+        help="Tarama bitişi; verilirse kalıcı pencereyi günceller, en güncel bloktan büyükse hata "
+        "(varsayılan: kalıcı pencere; yoksa ANALYSIS_WINDOW_SECONDS uzunluğunda)",
     )
     parser.add_argument(
         "--chain", default=None, choices=["robinhood", "solana"],
@@ -58,16 +65,6 @@ def main() -> None:
             chain = check_coin_chain(conn, coin, args.chain)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
-        if args.from_block is None:
-            row = conn.execute(
-                "SELECT first_block FROM coins WHERE address = ?", (coin,)
-            ).fetchone()
-            if row is None:
-                raise SystemExit(f"{coin} veritabanında yok; önce avimsin-scan çalıştırın.")
-            from_block = row[0]
-        else:
-            from_block = args.from_block
-
         wallets = conn.execute(
             "SELECT DISTINCT p.wallet FROM purchases p WHERE p.coin = ? ORDER BY p.block",
             (coin,),
@@ -93,8 +90,12 @@ def main() -> None:
         scores = []
         if eligible:
             with open_chain(chain) as client:
-                to_block = args.to_block if args.to_block is not None else client.block_number()
-                events = client.token_transfers(coin, from_block, to_block)
+                window = resolve_window(
+                    conn, coin, chain, client.block_number, args.from_block, args.to_block
+                )
+                for line in window.notes:
+                    print(line)
+                events = client.token_transfers(coin, window.from_block, window.to_block)
                 token_unit = 10 ** client.decimals(coin)
 
             for wallet in eligible:

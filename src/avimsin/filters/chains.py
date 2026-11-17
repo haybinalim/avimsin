@@ -16,6 +16,8 @@ Kaynaklar:
 
 from __future__ import annotations
 
+import math
+
 # Zincir adı → blok/slot aralığı (saniye). Adlar `chains.open_chain` ile aynı.
 BLOCK_INTERVAL_SECONDS: dict[str, float] = {
     "robinhood": 0.25,
@@ -32,3 +34,8 @@ def normalize_chain(chain: str) -> str:
         known = ", ".join(sorted(BLOCK_INTERVAL_SECONDS))
         raise ValueError(f"bilinmeyen zincir: {chain!r} (bilinenler: {known})")
     return name
+
+
+def blocks_for_seconds(seconds: float, chain: str) -> int:
+    """Süreyi zincirin blok/slot sayısına çevirir (en az 1; zaman damgası RPC'den çekilmez)."""
+    return max(1, math.ceil(seconds / BLOCK_INTERVAL_SECONDS[normalize_chain(chain)]))

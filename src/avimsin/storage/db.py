@@ -86,6 +86,14 @@ CREATE TABLE IF NOT EXISTS watch_alerts (
     wallets TEXT NOT NULL,
     PRIMARY KEY (chain, coin)
 );
+-- Kalıcı analiz penceresi (salt-eklemeli): filter ve score aynı kaydı paylaşır.
+-- complete=1 ise pencere bir daha kaymaz; 0 ise sonraki çalıştırmada hedefe uzatılır.
+CREATE TABLE IF NOT EXISTS analysis_windows (
+    coin TEXT PRIMARY KEY,
+    from_block INTEGER NOT NULL,
+    to_block INTEGER NOT NULL,
+    complete INTEGER NOT NULL
+);
 """
 
 # Faz 2'den önce oluşturulan veritabanlarına verdict kolonlarını ekler.
@@ -273,4 +281,24 @@ def save_score(
         " (coin, wallet, winrate, net_pnl, trades, frequency, score)"
         " VALUES (?, ?, ?, ?, ?, ?, ?)",
         (normalize_address(coin), normalize_address(wallet), winrate, pnl_in_tokens, trades, frequency, score),
+    )
+
+
+def load_window(conn: sqlite3.Connection, coin: str) -> tuple[int, int, bool] | None:
+    """Coin'in kayıtlı analiz penceresi: (from_block, to_block, complete) ya da None."""
+    row = conn.execute(
+        "SELECT from_block, to_block, complete FROM analysis_windows WHERE coin = ?",
+        (normalize_address(coin),),
+    ).fetchone()
+    return None if row is None else (row[0], row[1], bool(row[2]))
+
+
+def save_window(
+    conn: sqlite3.Connection, coin: str, from_block: int, to_block: int, complete: bool
+) -> None:
+    """Pencereyi yazar ya da günceller (çağıran işlemi commit eder)."""
+    conn.execute(
+        "INSERT OR REPLACE INTO analysis_windows (coin, from_block, to_block, complete)"
+        " VALUES (?, ?, ?, ?)",
+        (normalize_address(coin), from_block, to_block, 1 if complete else 0),
     )
