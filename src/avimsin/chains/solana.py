@@ -355,10 +355,10 @@ class SolanaAdapter:
         """Mint'in en eski işleminin slotu (oluşturma); işlem yoksa None."""
         return self._client.creation_slot(token)
 
-    def iter_token_transfers(
+    def iter_tx_transfers(
         self, token: str, from_slot: int, to_slot: int
-    ) -> Iterator[TransferEvent]:
-        """Mint transferlerini KRONOLOJİK ve tembel verir (erken durma için).
+    ) -> Iterator[list[TransferEvent]]:
+        """Mint transferlerini İŞLEM BAŞINA (olay listesi) KRONOLOJİK ve tembel verir.
 
         İmzalar eskiden yeniye parça parça getirilir (iter_signatures_ascending),
         her işlem yalnız tüketici istedikçe getTransaction ile açılır; tüketici
@@ -374,7 +374,16 @@ class SolanaAdapter:
             opened += 1
             if opened % PROGRESS_EVERY == 0:
                 _progress(f"{opened} işlem açıldı (slot {entry['slot']})")
-            yield from self._tx_to_events(tx, token, int(entry["slot"]), entry["signature"])
+            events = self._tx_to_events(tx, token, int(entry["slot"]), entry["signature"])
+            if events:
+                yield events
+
+    def iter_token_transfers(
+        self, token: str, from_slot: int, to_slot: int
+    ) -> Iterator[TransferEvent]:
+        """iter_tx_transfers'in düz (olay olay) hali."""
+        for events in self.iter_tx_transfers(token, from_slot, to_slot):
+            yield from events
 
     def _token_program(self, mint: str) -> str:
         program = self._token_programs.get(mint)

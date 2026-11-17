@@ -37,6 +37,11 @@ pozitif çıkış/giriş **miktarını** karşılaştırır; fiyat ve zarar koş
 Skorun oranı ekonomik winrate, net token akışı finansal P&L değildir. Gerçek swap
 ve maliyet modeli eksiktir.
 
+**Dağıtım ayrımı:** aynı işlemde aynı göndericiden `DISTRIBUTION_MIN_RECEIVERS` (varsayılan 3) veya
+daha fazla farklı alıcıya giden transferler içeriden dağıtım (dev/bundle) sayılır; bu alıcılar
+erken alıcı olmaz (scan "N dağıtım alıcısı atlandı" yazar). Her cüzdana ayrı işlemle yapılan
+dağıtım bu kuralla yakalanmaz.
+
 **Solana hızlı tarama (public RPC ~1 istek/sn):**
 - `avimsin-scan <mint>`: `--from-block` Solana'da opsiyoneldir; verilmezse başlangıç mint'in
   oluşturulduğu slottur (`getBlock` imleç imzası + `getSignaturesForAddress(before=...)` ile

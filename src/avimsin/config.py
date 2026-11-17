@@ -39,6 +39,9 @@ class Settings:
     # Solana filter: cüzdanın pencere içi bu kadar işlemden fazlası açılmaz; cüzdan
     # high_frequency (bot) sayılır.
     solana_max_tx_per_wallet: int = 100
+    # earliest_buyers: aynı işlemde aynı göndericiden bu kadar (veya fazla) farklı alıcıya
+    # giden transferler içeriden dağıtım sayılır, alıcılar erken alıcı olmaz.
+    distribution_min_receivers: int = 3
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -65,6 +68,7 @@ class Settings:
                 os.environ.get("SOLANA_MIN_INTERVAL_SECONDS", "0.9")
             ),
             solana_max_tx_per_wallet=int(os.environ.get("SOLANA_MAX_TX_PER_WALLET", "100")),
+            distribution_min_receivers=int(os.environ.get("DISTRIBUTION_MIN_RECEIVERS", "3")),
             watch_alert_cooldown_seconds=int(
                 os.environ.get("WATCH_ALERT_COOLDOWN_SECONDS", "86400")
             ),
