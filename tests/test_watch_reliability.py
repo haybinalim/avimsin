@@ -61,7 +61,9 @@ class FakeTelegram:
 def make_db(chain: str = "robinhood", coins=(C1,)):
     conn = connect(":memory:")
     for c in coins:
-        save_coin(conn, c, 1, chain=chain)
+        save_coin(conn, c, 1)
+        # Ham yazım: fikstür EVM adresleri; watcher testi adres korumasından bağımsız.
+        conn.execute("UPDATE coins SET chain = ? WHERE address = ?", (chain, c))
         for w in W:
             save_purchase(conn, c, w, 2, f"p-{c[-4:]}-{w[-4:]}")
             save_verdict(conn, c, w, "ok", "none", "geçti")

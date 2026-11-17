@@ -56,7 +56,7 @@ def dumpy(coin, wallet):  # girdinin %90'ı hemen çıkar: dump
 
 def run(monkeypatch, module, path, coin, client):
     monkeypatch.setattr(module, "open_chain", lambda chain: nullcontext(client))
-    monkeypatch.setattr(sys, "argv", [module.__name__, coin, "--db", str(path)])
+    monkeypatch.setattr(sys, "argv", [module.__name__, coin, "--db", str(path), "--chain", "robinhood"])
     module.main()
 
 

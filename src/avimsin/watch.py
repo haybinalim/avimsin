@@ -26,7 +26,8 @@ def main() -> None:
         "--once", action="store_true", help="Tek tur tara ve çık (daemon modu için sürekli)"
     )
     parser.add_argument(
-        "--chain", default="robinhood", choices=["robinhood", "solana"], help="Zincir seçimi"
+        "--chain", default="solana", choices=["robinhood", "solana"],
+        help="Zincir seçimi (varsayılan: solana)",
     )
     parser.add_argument("--db", default="data/avimsin.sqlite", help="SQLite dosya yolu")
     args = parser.parse_args()
