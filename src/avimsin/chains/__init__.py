@@ -24,6 +24,13 @@ def open_chain(chain: str):
     raise ValueError(f"Bilinmeyen zincir: {chain!r} (bilinenler: {', '.join(CHAIN_CHOICES)})")
 
 
+def attach_tx_cache(client, db_path: str) -> None:
+    """Adaptör işlem önbelleği destekliyorsa (Solana) DB dosyasına bağlar; EVM'de no-op."""
+    attach = getattr(client, "attach_tx_cache", None)
+    if attach is not None:
+        attach(db_path)
+
+
 def check_address_matches_chain(address: str, chain: str) -> None:
     """Adres biçimi seçilen zincirle uyuşmuyorsa RPC'den ÖNCE net hata verir.
 

@@ -30,7 +30,11 @@ def earliest_buyers(client: ChainClient, token: str, from_block: int, count: int
     latest = client.block_number()
     seen: set[str] = set()
     buyers: list[EarlyBuyer] = []
-    for event in client.token_transfers(token, from_block, latest):
+    # Adaptör kronolojik tembel akış sunuyorsa (Solana) yeterli alıcı bulununca durulur;
+    # yoksa (EVM) tüm aralık okunur — davranış değişmez.
+    stream = getattr(client, "iter_token_transfers", None)
+    events = stream(token, from_block, latest) if stream else client.token_transfers(token, from_block, latest)
+    for event in events:
         sender = event.frm
         if sender == ZERO_ADDRESS:
             continue  # mint: ilk bakiye dağıtıcıya gider, erken alıcı değildir

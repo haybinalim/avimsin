@@ -14,14 +14,18 @@ EVM tarafındaki mint/burn semantiğiyle aynı.
 
 from __future__ import annotations
 
+import sys
 import time
+from collections.abc import Iterator
 from typing import Any
 
 import httpx
 
 from ..config import settings
-from ..collectors.transfers import ZERO_ADDRESS, TransferEvent
+from ..collectors.transfers import ZERO_ADDRESS, TransferEvent, WalletTransfers
+from ..storage.tx_cache import TxCache, slim_transaction
 from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu sözleşme
+from .solana_addr import TOKEN_PROGRAMS, derive_ata
 
 # Sistem Programı: normal cüzdan (EOA benzeri) bu owner'a sahiptir; farklı
 # owner'lı hesaplar program/SPL hesabıdır (is_contract → True).
@@ -35,6 +39,29 @@ MIN_INTERVAL_SECONDS = 0.9
 RATE_LIMIT_RETRIES = 8
 RATE_LIMIT_WAIT_SECONDS = 20.0
 SIG_PAGE_LIMIT = 1000
+# İmleç imzası aranırken bakılacak en çok ardışık slot (atlanmış/boş slotlar için).
+CURSOR_MAX_SKIP = 50
+# Eskiden yeniye ilerlemede parça uzunluğu (slot, ~10 dk) ve boş parçalarda büyüme sınırı.
+CHUNK_SLOTS = 1500
+CHUNK_MAX_SLOTS = 200_000
+# İkili arama bu genişliğe inince bırakılır (sonra imleçten geriye sayfalanır).
+CREATION_SEARCH_SLOTS = 1000
+PROGRESS_EVERY = 100
+# getBlock: atlanmış slot / blok yok — bir sonraki slot denenir.
+_SKIPPED_BLOCK_CODES = {-32007, -32009, -32004}
+
+
+class RpcError(RuntimeError):
+    """JSON-RPC `error` yanıtı (kod ayrıştırılabilsin diye ayrı sınıf)."""
+
+    def __init__(self, method: str, error: dict) -> None:
+        super().__init__(f"{method} hata döndürdü: {error}")
+        self.code = error.get("code") if isinstance(error, dict) else None
+
+
+def _progress(message: str) -> None:
+    """Seyrek ilerleme satırı (stderr); URL/anahtar içermez."""
+    print(message, file=sys.stderr, flush=True)
 
 
 class SolanaClient:
@@ -45,7 +72,7 @@ class SolanaClient:
         url: str,
         timeout: float = 30.0,
         transport: httpx.BaseTransport | None = None,
-        min_interval: float = MIN_INTERVAL_SECONDS,
+        min_interval: float | None = None,
         rate_limit_retries: int = RATE_LIMIT_RETRIES,
         rate_limit_wait: float = RATE_LIMIT_WAIT_SECONDS,
     ) -> None:
@@ -53,7 +80,8 @@ class SolanaClient:
         self._http = httpx.Client(timeout=timeout, transport=transport)
         self._next_id = 0
         self._last_call: float | None = None
-        self.min_interval = min_interval
+        self.min_interval = settings.solana_min_interval_seconds if min_interval is None else min_interval
+        self.tx_cache: TxCache | None = None
         self.rate_limit_retries = rate_limit_retries
         self.rate_limit_wait = rate_limit_wait
 
@@ -94,7 +122,7 @@ class SolanaClient:
                     response.raise_for_status()
                     data = response.json()
                     if "error" in data:
-                        raise RuntimeError(f"{method} hata döndürdü: {data['error']}")
+                        raise RpcError(method, data["error"])
                     return data["result"]
             time.sleep(wait)
             wait = min(wait * 2, 60.0)
@@ -108,6 +136,7 @@ class SolanaClient:
         from_slot: int | None = None,
         until_slot: int | None = None,
         max_signatures: int | None = None,
+        before: str | None = None,
     ) -> list[dict]:
         """Adrese dokunan işlemleri yeniden eskiye doğru sayfalar.
 
@@ -115,15 +144,21 @@ class SolanaClient:
         imza bazlıdır; slot filtresi istemci tarafında yapılır). Hatalı
         işlemler de döner — çağıran `err` alanına bakar. ``max_signatures``
         verilirse o kadar imzadan sonra durur: kesilen aralık eksik veri
-        demektir, çağıran pencereyi daraltmalıdır.
+        demektir, çağıran pencereyi daraltmalıdır. ``before`` ilk sayfanın
+        imleci: o imzadan ESKİ imzalar döner; adresle ilgisiz herhangi bir
+        işlemin imzası olabilir (bkz. slot_cursor) — böylece ``until_slot``
+        üstündeki yeni imzalar hiç indirilmez.
         """
         out: list[dict] = []
-        before: str | None = None
+        pages = 0
         while True:
             params: dict[str, Any] = {"limit": SIG_PAGE_LIMIT}
             if before is not None:
                 params["before"] = before
             batch = self.call("getSignaturesForAddress", [address, params])
+            pages += 1
+            if pages % 20 == 0:
+                _progress(f"{len(out)} imza toplandı ({pages} sayfa)")
             if not batch:
                 return out
             for entry in batch:
@@ -141,13 +176,112 @@ class SolanaClient:
             before = batch[-1]["signature"]
 
     def get_transaction(self, signature: str) -> dict:
-        """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir)."""
+        """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir).
+
+        Önbellek bağlıysa (attach_tx_cache) sonlanmış işlem bir kez indirilir ve
+        yalnız gereken alanlar (slot, meta.err, token bakiyeleri, accountKeys) döner.
+        """
+        if self.tx_cache is not None:
+            cached = self.tx_cache.get(signature)
+            if cached is not None:
+                return cached
         # Resmî sürüm sözleşmesi: legacy/v0/v1 için en yüksek desteklenen sürüm 1.
         # ALT v0'a özgüdür. JSON-parsed bakiye alanları ortak kullanılır.
-        return self.call(
+        tx = self.call(
             "getTransaction",
             [signature, {"encoding": "jsonParsed", "maxSupportedTransactionVersion": 1}],
         )
+        if self.tx_cache is not None and tx is not None:
+            tx = slim_transaction(tx)
+            self.tx_cache.put(signature, tx)
+        return tx
+
+    def first_available_block(self) -> int:
+        return int(self.call("getFirstAvailableBlock", []))
+
+    def slot_cursor(self, slot: int) -> str | None:
+        """``slot``taki (boşsa/atlanmışsa sonraki ilk dolu bloktaki) bir işlem imzası.
+
+        getSignaturesForAddress'in ``before`` imleci olarak kullanılır: imleç adresle
+        ilgisiz olabilir ve o imzadan eski imzaları döndürür. Blokta ilk imza alınır;
+        böylece sonuç "slot < blok slotu" demektir. En çok CURSOR_MAX_SKIP slot denenir;
+        hiç bulunamazsa None (örn. slot en güncelin ötesinde: imleçsiz başlanır).
+        """
+        for candidate in range(slot, slot + CURSOR_MAX_SKIP):
+            try:
+                block = self.call(
+                    "getBlock",
+                    [candidate, {"transactionDetails": "signatures", "rewards": False,
+                                 "maxSupportedTransactionVersion": 0}],
+                )
+            except RpcError as exc:
+                if exc.code in _SKIPPED_BLOCK_CODES:
+                    continue
+                raise
+            signatures = (block or {}).get("signatures") or []
+            if signatures:
+                return signatures[0]
+        return None
+
+    def creation_slot(self, address: str) -> int | None:
+        """Adresin en eski işleminin slotu (yoksa None); ikili arama, O(log) istek.
+
+        Yoklama: ``slot_cursor(mid)`` imleciyle ``getSignaturesForAddress(limit=1,
+        before=imleç)`` boş değilse adresin mid'den eski işlemi vardır. Aralık
+        CREATION_SEARCH_SLOTS'a inince imleçten geriye sayfalanıp en eski imzanın
+        slotu alınır. Not: getFirstAvailableBlock'tan eski işlemler aranmaz.
+        """
+        if not self.call("getSignaturesForAddress", [address, {"limit": 1}]):
+            return None
+        lo = self.first_available_block()
+        hi = self.get_slot() + 1  # invaryant: slot < hi işlemi var; slot < lo işlemi yok
+        while hi - lo > CREATION_SEARCH_SLOTS:
+            mid = (lo + hi) // 2
+            cursor = self.slot_cursor(mid)
+            if cursor is None:
+                raise RuntimeError(f"slot {mid} için imleç imzası bulunamadı")
+            probe = self.call("getSignaturesForAddress", [address, {"limit": 1, "before": cursor}])
+            if probe:
+                hi = mid
+            else:
+                lo = mid
+        cursor = self.slot_cursor(hi)
+        entries = self.get_signatures_for_address(address, from_slot=lo, before=cursor)
+        if not entries:
+            # Aranan aralıkta imza yok: lo altında olabilir; en yakın bilinen alt sınır
+            return lo
+        return min(int(e["slot"]) for e in entries)
+
+    def iter_signatures_ascending(
+        self,
+        address: str,
+        from_slot: int,
+        to_slot: int,
+        chunk: int = CHUNK_SLOTS,
+        max_chunk: int = CHUNK_MAX_SLOTS,
+    ) -> Iterator[dict]:
+        """[from_slot, to_slot] imzalarını ESKİDEN YENİYE tembel verir.
+
+        Aralık ``chunk`` slotluk parçalara bölünür; her parça ``slot_cursor(b+1)``
+        imleciyle geriye sayfalanıp çevrilir. Tüketici durunca sonraki parçalar
+        istenmez (erken durma). Boş parçada parça uzunluğu ikiye katlanır
+        (max_chunk'a kadar), dolu parçadan sonra tabana döner. Aynı slot içi sıra,
+        getSignaturesForAddress dönüş sırasının tersidir (eski → yeni).
+        """
+        a = from_slot
+        size = chunk
+        while a <= to_slot:
+            b = min(a + size - 1, to_slot)
+            cursor = self.slot_cursor(b + 1)
+            entries = self.get_signatures_for_address(
+                address, from_slot=a, until_slot=b, before=cursor
+            )
+            if entries:
+                size = chunk
+                yield from reversed(entries)
+            else:
+                size = min(size * 2, max_chunk)
+            a = b + 1
 
     def get_account_owner(self, address: str) -> str | None:
         """Hesabın owner programını döndürür; hesap yoksa None."""
@@ -164,6 +298,8 @@ class SolanaClient:
 
     def close(self) -> None:
         self._http.close()
+        if self.tx_cache is not None:
+            self.tx_cache.close()
 
     def __enter__(self) -> "SolanaClient":
         return self
@@ -177,6 +313,11 @@ class SolanaAdapter:
 
     def __init__(self, client: SolanaClient) -> None:
         self._client = client
+        self._token_programs: dict[str, str] = {}
+
+    def attach_tx_cache(self, path: str) -> None:
+        """getTransaction önbelleğini ``path`` SQLite dosyasına bağlar (bkz. storage/tx_cache.py)."""
+        self._client.tx_cache = TxCache(path)
 
     def block_number(self) -> int:
         return self._client.get_slot()
@@ -205,6 +346,79 @@ class SolanaAdapter:
             events.extend(self._tx_to_events(tx, token, slot, entry["signature"]))
         events.sort(key=lambda e: (e.block, e.tx))
         return events
+
+    def first_slot(self, token: str) -> int | None:
+        """Mint'in en eski işleminin slotu (oluşturma); işlem yoksa None."""
+        return self._client.creation_slot(token)
+
+    def iter_token_transfers(
+        self, token: str, from_slot: int, to_slot: int
+    ) -> Iterator[TransferEvent]:
+        """Mint transferlerini KRONOLOJİK ve tembel verir (erken durma için).
+
+        İmzalar eskiden yeniye parça parça getirilir (iter_signatures_ascending),
+        her işlem yalnız tüketici istedikçe getTransaction ile açılır; tüketici
+        durunca (örn. yeterli alıcı bulununca) gerisi hiç indirilmez. Aynı slot içi
+        sıra, getSignaturesForAddress sırasının tersidir (eski → yeni); token_transfers
+        ise aynı slot içinde imzaya göre sıralar.
+        """
+        opened = 0
+        for entry in self._client.iter_signatures_ascending(token, from_slot, to_slot):
+            if entry.get("err") is not None:
+                continue  # başarısız işlem bakiye değiştirmez
+            tx = self._client.get_transaction(entry["signature"])
+            opened += 1
+            if opened % PROGRESS_EVERY == 0:
+                _progress(f"{opened} işlem açıldı (slot {entry['slot']})")
+            yield from self._tx_to_events(tx, token, int(entry["slot"]), entry["signature"])
+
+    def _token_program(self, mint: str) -> str:
+        program = self._token_programs.get(mint)
+        if program is None:
+            program = self._client.get_account_owner(mint)
+            if program not in TOKEN_PROGRAMS:
+                raise RuntimeError(f"{mint} SPL mint değil ya da bulunamadı (owner: {program})")
+            self._token_programs[mint] = program
+        return program
+
+    def wallet_transfers(
+        self, token: str, wallets: list[str], from_slot: int, to_slot: int
+    ) -> WalletTransfers:
+        """Cüzdanların mint'e ait transferleri: yalnız cüzdanın ATA imzaları açılır.
+
+        ATA = PDA(owner, token_program, mint). [from_slot, to_slot] içindeki imzalar,
+        ``slot_cursor(to_slot+1)`` imleciyle alınır (pencereden yeni imzalar indirilmez).
+        Cüzdan başına pencere içi imza sayısı SOLANA_MAX_TX_PER_WALLET'i aşarsa o
+        cüzdanın işlemleri açılmaz (``capped``). Bilinen sınır: ATA dışı token hesabı
+        kullanan cüzdanın transferleri görülmez.
+        """
+        program = self._token_program(token)
+        limit = settings.solana_max_tx_per_wallet
+        cursor = self._client.slot_cursor(to_slot + 1)
+        signatures: dict[str, int] = {}  # imza -> slot (tekilleştirilmiş)
+        counts: dict[str, int] = {}
+        capped: set[str] = set()
+        for wallet in wallets:
+            ata = derive_ata(wallet, token, program)
+            entries = self._client.get_signatures_for_address(
+                ata, from_slot=from_slot, until_slot=to_slot, max_signatures=limit + 1, before=cursor
+            )
+            counts[wallet] = len(entries)
+            if len(entries) > limit:
+                capped.add(wallet)
+                continue
+            for entry in entries:
+                if entry.get("err") is None:
+                    signatures[entry["signature"]] = int(entry["slot"])
+        events: list[TransferEvent] = []
+        total = len(signatures)
+        for n, (signature, slot) in enumerate(signatures.items(), start=1):
+            tx = self._client.get_transaction(signature)
+            events.extend(self._tx_to_events(tx, token, slot, signature))
+            if n % PROGRESS_EVERY == 0:
+                _progress(f"{n}/{total} işlem açıldı")
+        events.sort(key=lambda e: (e.block, e.tx))
+        return WalletTransfers(events=events, capped=capped, signature_counts=counts, limit=limit)
 
     def is_contract(self, wallet: str) -> bool:
         """Hesap program/SPL hesabı mı? (owner = Sistem Programı değilse evet)"""

@@ -17,7 +17,7 @@ from __future__ import annotations
 import argparse
 from decimal import Decimal
 
-from .chains import open_chain
+from .chains import attach_tx_cache, open_chain
 from .filters.base import WalletHistory
 from .scoring.engine import rank, score_wallet
 from .storage.db import connect as db_connect
@@ -111,7 +111,18 @@ def main() -> None:
         scores = []
         if eligible:
             with open_chain(chain) as client:
-                events = client.token_transfers(coin, stored[0], stored[1])
+                wallet_fetch = getattr(client, "wallet_transfers", None)
+                if wallet_fetch is not None:
+                    # Önbellek filter'ın indirdiği işlemleri yeniden indirtmez (score salt-okur:
+                    # pencereye dokunulmaz; DB'de yalnız işlem önbelleği tablosu yazılır).
+                    attach_tx_cache(client, args.db)
+                    fetched = wallet_fetch(coin, eligible, stored[0], stored[1])
+                    events = fetched.events
+                    for wallet in sorted(fetched.capped):
+                        print(f"NOT: {wallet} pencerede ≥{fetched.limit + 1} işlem; skorlanmadı")
+                    eligible = [w for w in eligible if w not in fetched.capped]
+                else:
+                    events = client.token_transfers(coin, stored[0], stored[1])
                 token_unit = 10 ** client.decimals(coin)
 
             for wallet in eligible:

@@ -23,3 +23,17 @@ class TransferEvent:
     tx: str  # tx hash / imza
     value: int = 0  # ham token birimi (ondalık ölçeğiyle)
     token: str = ""  # hangi token: EVM kontrat adresi / SPL mint adresi
+
+
+@dataclass(frozen=True)
+class WalletTransfers:
+    """Cüzdan bazlı transfer sorgusunun sonucu (ChainClient.wallet_transfers).
+
+    capped: pencere içi işlem sayısı ``limit``'i aşan cüzdanlar (işlemleri açılmadı).
+    signature_counts: cüzdan başına pencere içi imza sayısı (en çok limit+1).
+    """
+
+    events: list[TransferEvent]
+    capped: set[str]
+    signature_counts: dict[str, int]
+    limit: int
