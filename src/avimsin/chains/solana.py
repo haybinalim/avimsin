@@ -357,6 +357,8 @@ class SolanaAdapter:
                 continue  # başarısız işlem bakiye değiştirmez
             slot = int(entry["slot"])
             tx = self._client.get_transaction(entry["signature"])
+            if tx is None:
+                continue  # okunamadı; client.unreadable'a kaydedildi
             events.extend(self._tx_to_events(tx, token, slot, entry["signature"]))
         events.sort(key=lambda e: (e.block, e.tx))
         return events
@@ -427,9 +429,12 @@ class SolanaAdapter:
             tx = self._client.get_transaction(signature)
             if tx is None:
                 continue
-            keys = tx["transaction"]["message"]["accountKeys"]
+            keys = [
+                k.get("pubkey", k) if isinstance(k, dict) else k
+                for k in (tx.get("transaction", {}).get("message", {}).get("accountKeys") or [])
+            ]  # önbelleksiz ham jsonParsed: {"pubkey": ...} olabilir
             for side in ("preTokenBalances", "postTokenBalances"):
-                for balance in tx["meta"].get(side) or []:
+                for balance in (tx.get("meta") or {}).get(side) or []:
                     index = balance.get("accountIndex")
                     if (
                         balance.get("mint") == token

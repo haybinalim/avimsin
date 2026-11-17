@@ -511,3 +511,24 @@ def test_wallet_to_wallet_transfer_is_not_a_purchase() -> None:
     buyers = earliest_buyers(make_adapter(chain), MINT, 100, 5, skips)
     assert [b.wallet for b in buyers] == [addr(61)]
     assert skips.wallet_to_wallet == 1
+
+
+def test_token_transfers_watcher_path_survives_null_tx(monkeypatch) -> None:
+    monkeypatch.setattr(solana.time, "sleep", lambda s: None)
+    chain, wallets, _ = wallet_world()
+    chain.null_first["buy1"] = 99
+    adapter = make_adapter(chain)
+    events = adapter.token_transfers(MINT, 100, 2000)
+    assert "buy1" not in {e.tx for e in events} and "buy0" in {e.tx for e in events}
+    assert adapter.unreadable == ["buy1"]
+
+
+def test_extra_accounts_with_raw_dict_account_keys() -> None:
+    wallet, odd, pool_ta = addr(7), addr(88), addr(89)
+    raw = _tx_with_accounts([{"pubkey": pool_ta}, {"pubkey": odd}], MINT, [(1, wallet, 0)], [(1, wallet, 5)])
+    chain = FakeSolanaChain(
+        signatures=[], transactions={"buy": raw}, owners={MINT: TOKEN_PROGRAM},
+        address_signatures={}, fill_blocks=True,
+    )
+    adapter = make_adapter(chain)  # önbelleksiz: ham yanıt
+    assert adapter._extra_token_accounts(wallet, MINT, ["buy"]) == [odd]
