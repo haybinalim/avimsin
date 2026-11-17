@@ -122,7 +122,7 @@ def test_watch_queries_only_selected_chain_and_uses_its_smart_wallets(chain) -> 
         for coin_chain, coin in coins.items():
             save_coin(conn, coin, 100, chain=coin_chain)
             save_purchase(conn, coin, wallets[coin_chain], 100, f"p-{coin_chain}")
-            save_verdict(conn, wallets[coin_chain], "ok", "none", "geçti")
+            save_verdict(conn, coin, wallets[coin_chain], "ok", "none", "geçti")
         conn.commit()
         for threshold, expected in [(2, 0), (1, 1)]:
             for table in ("watch_cursor", "watch_inflows", "watch_alerts"):

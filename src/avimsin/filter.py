@@ -15,7 +15,14 @@ from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
 from .filters.dump_rules import DumpRule
 from .storage.db import connect as db_connect
-from .storage.db import check_coin_chain, normalize_address, save_verdict, set_chain
+from .storage.db import (
+    LEGACY_NOTE,
+    check_coin_chain,
+    has_coin_results,
+    normalize_address,
+    save_verdict,
+    set_chain,
+)
 
 
 def _is_contract(client: ChainClient, wallet: str) -> bool:
@@ -71,6 +78,9 @@ def main() -> None:
         if not wallets:
             raise SystemExit(f"{coin} için kayıtlı alıcı yok; önce avimsin-scan çalıştırın.")
 
+        if not has_coin_results(conn):
+            print(LEGACY_NOTE)
+
         with open_chain(chain) as client:
             to_block = args.to_block if args.to_block is not None else client.block_number()
             events = client.token_transfers(coin, from_block, to_block)
@@ -101,7 +111,7 @@ def main() -> None:
                             verdict, rule_name, reason = result.verdict, result.rule, result.reason
                             break
                 counts[verdict] += 1
-                save_verdict(conn, wallet, verdict, rule_name, reason)
+                save_verdict(conn, coin, wallet, verdict, rule_name, reason)
                 print(f"{wallet}  {verdict or 'unknown':<7} [{rule_name}] {reason}")
 
         total = sum(counts.values())

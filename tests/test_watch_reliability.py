@@ -64,8 +64,7 @@ def make_db(chain: str = "robinhood", coins=(C1,)):
         save_coin(conn, c, 1, chain=chain)
         for w in W:
             save_purchase(conn, c, w, 2, f"p-{c[-4:]}-{w[-4:]}")
-    for w in W:
-        save_verdict(conn, w, "ok", "none", "geçti")
+            save_verdict(conn, c, w, "ok", "none", "geçti")
     conn.commit()
     return conn
 
@@ -180,10 +179,10 @@ def test_chains_do_not_mix() -> None:
     save_coin(conn, sol, 1, chain="solana")
     for w in ws:
         save_purchase(conn, sol, w, 2, f"p{w[0]}")
-        save_verdict(conn, w, "ok", "none", "geçti")
+        save_verdict(conn, sol, w, "ok", "none", "geçti")
     for w in W[:3]:
         save_purchase(conn, C1, w, 2, f"p{w[-4:]}")
-        save_verdict(conn, w, "ok", "none", "geçti")
+        save_verdict(conn, C1, w, "ok", "none", "geçti")
     conn.commit()
     rh, sl, tg = Chain(1000), Chain(5000), FakeTelegram()
     run(rh, conn, tg)
