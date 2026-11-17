@@ -37,6 +37,26 @@ pozitif çıkış/giriş **miktarını** karşılaştırır; fiyat ve zarar koş
 Skorun oranı ekonomik winrate, net token akışı finansal P&L değildir. Gerçek swap
 ve maliyet modeli eksiktir.
 
+**Solana hızlı tarama (public RPC ~1 istek/sn):**
+- `avimsin-scan <mint>`: `--from-block` Solana'da opsiyoneldir; verilmezse başlangıç mint'in
+  oluşturulduğu slottur (`getBlock` imleç imzası + `getSignaturesForAddress(before=...)` ile
+  ikili arama, O(log) istek; tüm geçmiş sayfalanmaz). EVM'de `--from-block` zorunludur.
+  İmzalar eskiden yeniye ~1500 slotluk parçalarla açılır; `--count` alıcı bulununca
+  `getTransaction` durur. Aynı slot içi sıra, `getSignaturesForAddress` sırasının tersidir.
+- `avimsin-filter`/`avimsin-score`: mint'in tüm işlemleri yerine her cüzdanın o mint için
+  ATA (associated token account) adresinin imzaları, pencere içinde (pencere sonrası imzalar
+  indirilmez) açılır. **Bilinen sınır:** ATA dışı token hesabı kullanan cüzdanın transferleri
+  görülmez. Pencerede `SOLANA_MAX_TX_PER_WALLET` (varsayılan 100) imzayı aşan cüzdanın işlemleri
+  açılmaz; `bot` / `high_frequency` sayılır. Alıcıların yarısından fazlasının ATA'sında hiç işlem
+  yoksa filter UYARI basar (yanlış ATA ya da pencere belirtisi). `getFirstAvailableBlock`'tan
+  eski işlemler aranmaz.
+- `getTransaction` sonucu (yalnız gereken alanlar) aynı SQLite'ta `sol_tx_cache` tablosunda
+  önbelleğe alınır; score, filter'ın indirdiğini yeniden indirmez. Filter önbellek için ayrı
+  bağlantı kullandığından pencere kaydını erken commit eder; çalışma hata verirse eski pencere geri yazılır.
+- Env: `SOLANA_MIN_INTERVAL_SECONDS` (çağrılar arası asgari süre, varsayılan 0.9; ücretli uçta
+  düşürülebilir), `SOLANA_MAX_TX_PER_WALLET` (varsayılan 100). Uzun işlemlerde stderr'e seyrek
+  ilerleme satırı basılır ("n/N işlem açıldı"; URL yazılmaz). `watch` bu yoldan etkilenmez.
+
 **Karar ve skor coin bazlıdır:** `coin_verdicts(coin, wallet, ...)` ve
 `coin_scores(coin, wallet, ...)` tabloları. `avimsin-filter <coin>` ve
 `avimsin-score <coin>` yalnız o coin'in satırlarını yazar/yeniler; başka coin'deki
@@ -132,7 +152,7 @@ Kod ağ-bağımsız yazılır; EVM ağları ve Solana aynı arayüzü kullanır.
 cd ~/Projects/avimsin
 uv sync                # Python 3.12 sanal ortamını kurar, bağımlılıkları yükler
 uv run avimsin-rpc     # RPC uçlarını sıralı ölçer; aynı ağ içinde karşılaştırır
-uv run avimsin-scan <mint> --from-block <slot>   # Solana (varsayılan): erken alıcıları topla
+uv run avimsin-scan <mint> [--from-block <slot>]   # Solana (varsayılan): erken alıcıları topla (slot opsiyonel)
 uv run avimsin-filter <mint>    # alıcıları bot/kaçak satış kurallarından geçir
 uv run avimsin-score <mint>     # temiz cüzdanları winrate/P&L/frekans ile sırala
 uv run avimsin-watch            # sinyal izleyici (Telegram'a bildirir; varsayılan solana)
