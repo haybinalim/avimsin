@@ -138,6 +138,13 @@ def test_early_stop_opens_only_needed_transactions() -> None:
     assert chain.count("getSignaturesForAddress") < 20
 
 
+def test_chunk_last_slot_record_not_lost() -> None:
+    # İlk parça [100, 1599]; 1599 parçanın SON slotu: imleç slot_cursor(b+1) olmalı.
+    chain, wallets = buy_chain([100, 1_599, 1_600])
+    buyers = earliest_buyers(make_adapter(chain), MINT, 100, 3)
+    assert [b.wallet for b in buyers] == wallets
+
+
 def test_early_stop_same_slot_order_is_reverse_of_listing() -> None:
     chain, wallets = buy_chain([100, 100, 100])
     # getSignaturesForAddress aynı slotta yeniden eskiye döner (buy2, buy1, buy0) → ters çevrilir.
@@ -186,7 +193,7 @@ def test_scan_evm_still_requires_from_block(tmp_path, monkeypatch) -> None:
 # --- cüzdan bazlı filter / score ---------------------------------------------------------
 
 
-def wallet_world(extra_in_window: int = 0, silent: bool = False):
+def wallet_world(extra_in_window: int = 0, silent: bool = False, edge: bool = False):
     """Üç alıcı: w0 temiz, w1 çok işlemli (ATA'sında extra_in_window ek işlem), w2 ATA'sız (silent)."""
     wallets = [addr(1), addr(2), addr(3)]
     txs: dict[str, dict] = {}
@@ -206,6 +213,8 @@ def wallet_world(extra_in_window: int = 0, silent: bool = False):
         add(f"churn{k}", 200 + k, wallets[1], [(POOL, 5), (wallets[1], 1000)], [(POOL, 0), (wallets[1], 1005)])
     for k in range(3):  # pencere SONRASI işlemler (to_block=2000)
         add(f"late{k}", 3000 + k, wallets[0], [(POOL, 5), (wallets[0], 1000)], [(POOL, 0), (wallets[0], 1005)])
+    if edge:  # pencerenin SON slotunda (to_block=2000) ATA işlemi
+        add("edge", 2000, wallets[0], [(POOL, 7), (wallets[0], 1000)], [(POOL, 0), (wallets[0], 1007)])
     all_sigs.sort(key=lambda e: -e["slot"])
     program = TOKEN_PROGRAM
     ata_sigs = {
@@ -348,6 +357,25 @@ def test_filter_failure_restores_window(tmp_path, monkeypatch) -> None:
         run_cli(monkeypatch, filter_cli, path, MINT, "--chain", "solana", "--from-block", "100", "--to-block", "2000")
     with sqlite3.connect(path) as conn:
         assert conn.execute("SELECT COUNT(*) FROM analysis_windows").fetchone()[0] == 0
+
+
+def test_wallet_transfers_window_end_slot_and_cursor_calls() -> None:
+    chain, wallets, _ = wallet_world(edge=True)
+    result = make_adapter(chain).wallet_transfers(MINT, wallets, 100, 2000)
+    assert "edge" in {e.tx for e in result.events}  # to_slot'taki işlem dahil
+    ata_calls = [p for m, p in chain.calls if m == "getSignaturesForAddress" and p[0] != MINT]
+    assert ata_calls
+    assert any(m == "getBlock" and p[0] == 2001 for m, p in chain.calls)  # imleç to_slot+1'den
+    assert {a for a, _ in ata_calls} == {derive_ata(w, MINT, TOKEN_PROGRAM) for w in wallets}
+    first_per_address = {}
+    for address, opts in ata_calls:
+        first_per_address.setdefault(address, opts)
+    assert all(o.get("before") == "fill2001" for o in first_per_address.values())  # ilk sayfa imleçli
+    for address, opts in ata_calls:
+        # Sunucunun döndürdüğü imzaların hiçbiri to_slot'tan yeni değil: yeni imza hiç indirilmedi.
+        assert all(e["slot"] <= 2000 for e in chain._signatures(address, opts))
+    opened = {p[0] for m, p in chain.calls if m == "getTransaction"}
+    assert not any(name.startswith("late") for name in opened)
 
 
 # --- ilerleme ve ayar --------------------------------------------------------------------

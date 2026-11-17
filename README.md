@@ -53,6 +53,8 @@ ve maliyet modeli eksiktir.
 - `getTransaction` sonucu (yalnız gereken alanlar) aynı SQLite'ta `sol_tx_cache` tablosunda
   önbelleğe alınır; score, filter'ın indirdiğini yeniden indirmez. Filter önbellek için ayrı
   bağlantı kullandığından pencere kaydını erken commit eder; çalışma hata verirse eski pencere geri yazılır.
+  Bilinen sınır: süreç SIGKILL ile öldürülürse (geri yazma çalışamaz) yeni pencere kayıtlı kalabilir;
+  `avimsin-filter`'ı yeniden çalıştırın.
 - Env: `SOLANA_MIN_INTERVAL_SECONDS` (çağrılar arası asgari süre, varsayılan 0.9; ücretli uçta
   düşürülebilir), `SOLANA_MAX_TX_PER_WALLET` (varsayılan 100). Uzun işlemlerde stderr'e seyrek
   ilerleme satırı basılır ("n/N işlem açıldı"; URL yazılmaz). `watch` bu yoldan etkilenmez.

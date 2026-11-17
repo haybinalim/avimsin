@@ -221,6 +221,7 @@ class SolanaClient:
             signatures = (block or {}).get("signatures") or []
             if signatures:
                 return signatures[0]
+        _progress(f"UYARI: slot {slot} sonrası {CURSOR_MAX_SKIP} slotta dolu blok bulunamadı; imleçsiz devam")
         return None
 
     def creation_slot(self, address: str) -> int | None:
@@ -231,6 +232,9 @@ class SolanaClient:
         CREATION_SEARCH_SLOTS'a inince imleçten geriye sayfalanıp en eski imzanın
         slotu alınır. Not: getFirstAvailableBlock'tan eski işlemler aranmaz.
         """
+        # Varsayım: getSlot en güncel (tepe) slottur ve getBlock/getSignaturesForAddress
+        # varsayılan finalized taahhüdünde döner; tepedeki henüz finalize olmamış
+        # slotlar için imleç bulunamayabilir (bu durumda imleçsiz başlanır, uyarı basılır).
         if not self.call("getSignaturesForAddress", [address, {"limit": 1}]):
             return None
         lo = self.first_available_block()

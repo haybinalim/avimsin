@@ -3,7 +3,7 @@
 Bağımlılık yok (solders gerekmez). ATA = PDA(seeds=[owner, token_program, mint],
 program=ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL). PDA, bump 255→0 inerek
 sha256(seeds || bump || program_id || "ProgramDerivedAddress") çıktısının ed25519
-eğrisi ÜZERİNDE OLMADIĞI ilk değerdir. Doğruluğu tests/test_solana_ata.py içindeki
+eğrisi ÜZERİNDE OLMADIĞI ilk değerdir. Doğruluğu tests/test_solana_fast.py içindeki
 gerçek zincirden alınmış vektörlerle kanıtlanır.
 """
 
