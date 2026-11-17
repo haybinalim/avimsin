@@ -100,8 +100,10 @@ def test_score_coin2_refreshes_only_coin2(tmp_path, monkeypatch):
     for coin in (C1, C2):
         run(monkeypatch, filter_cli, path, coin, client)
     run(monkeypatch, score_cli, path, C1, client)
-    run(monkeypatch, score_cli, path, C2, client)
     c1_before = q(path, "SELECT * FROM coin_scores WHERE coin = ?", (C1,))
+    assert c1_before
+    run(monkeypatch, score_cli, path, C2, client)
+    assert q(path, "SELECT * FROM coin_scores WHERE coin = ?", (C1,)) == c1_before
     assert len(q(path, "SELECT * FROM coin_scores WHERE coin = ?", (C2,))) == 2
 
     with sqlite3.connect(path) as conn:  # coin2'de ONLY2 artık uygun değil
