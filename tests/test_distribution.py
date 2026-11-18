@@ -12,8 +12,8 @@ DEV = "dev"
 TOKEN = "tok"
 
 
-class Stub:
-    """token_transfers'i düz liste veren (EVM benzeri) istemci."""
+class EvmStub:
+    """Yalnız token_transfers veren (EVM benzeri, iter_tx_transfers yok) istemci."""
 
     def __init__(self, events):
         self.events = events
@@ -23,6 +23,20 @@ class Stub:
 
     def token_transfers(self, token, a, b):
         return self.events
+
+
+class Stub(EvmStub):
+    """İşlem başına gruplu akış veren (Solana benzeri) istemci."""
+
+    def iter_tx_transfers(self, token, a, b):
+        group = []
+        for e in self.events:
+            if group and group[0].tx != e.tx:
+                yield group
+                group = []
+            group.append(e)
+        if group:
+            yield group
 
 
 def ev(frm, to, tx, block=1):
@@ -38,6 +52,14 @@ def test_distribution_tx_is_skipped_and_counted() -> None:
     skips = DistributionSkips()
     assert wallets(earliest_buyers(Stub(events), TOKEN, 0, 10, skips)) == ["real"]
     assert (skips.receivers, skips.txs) == (4, 1)
+
+
+def test_evm_path_has_no_distribution_rule() -> None:
+    events = [ev(DEV, f"w{i}", "t1") for i in range(4)] + [ev("pool", "real", "t2", 2)]
+    skips = DistributionSkips()
+    got = wallets(earliest_buyers(EvmStub(events), TOKEN, 0, 10, skips))
+    assert got == ["w0", "w1", "w2", "w3", "real"]
+    assert (skips.receivers, skips.txs) == (0, 0)
 
 
 def test_two_receivers_not_distribution() -> None:

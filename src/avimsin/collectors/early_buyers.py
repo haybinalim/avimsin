@@ -6,7 +6,7 @@ Ağ-bağımsız: ChainClient protokolünü dolduran her adaptörle çalışır
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from ..chains.protocol import ChainClient
@@ -30,18 +30,6 @@ class DistributionSkips:
     receivers: int = 0
     txs: int = 0
     wallet_to_wallet: int = 0  # alım sayılmayan cüzdandan cüzdana transferler
-
-
-def _tx_groups(events: Iterable[TransferEvent]) -> Iterator[list[TransferEvent]]:
-    """Ardışık, aynı (blok, tx) olaylarını işlem başına gruplar (EVM logları / düz akış)."""
-    group: list[TransferEvent] = []
-    for event in events:
-        if group and (group[0].block, group[0].tx) != (event.block, event.tx):
-            yield group
-            group = []
-        group.append(event)
-    if group:
-        yield group
 
 
 def distribution_receivers(group: list[TransferEvent], min_receivers: int) -> set[tuple[str, str]]:
@@ -75,19 +63,21 @@ def earliest_buyers(
     Mint'ler (from = 0x0 / mint authority) erken alıcı sayılmaz: ilk bakiye
     genelde dağıtıcı cüzdana gider, gerçek erken alıcı değildir. Aynı işlemde aynı
     göndericiden ≥ DISTRIBUTION_MIN_RECEIVERS farklı alıcıya giden transferler
-    dağıtım sayılır ve alıcılar atlanır (``skips`` doldurulur). Sınır: dağıtım
+    (yalnız Solana; EVM'de kural yok) dağıtım sayılır ve alıcılar atlanır (``skips`` doldurulur). Sınır: dağıtım
     cüzdanları yalnız bu işlem-içi desenle yakalanır; her cüzdana ayrı işlemle
     dağıtım yapan gelişmiş bundle'lar yakalanmaz.
     """
     min_receivers = settings.distribution_min_receivers if min_receivers is None else min_receivers
     latest = client.block_number()
     # Adaptör işlem başına kronolojik tembel akış sunuyorsa (Solana) yeterli alıcı bulununca
-    # durulur ve işlem sınırı bilinir; yoksa (EVM) tüm aralık okunup (blok, tx) ile gruplanır.
+    # durulur ve işlem sınırı bilinir; yoksa (EVM) olaylar tek tek işlenir ve dağıtım kuralı uygulanmaz.
     per_tx = getattr(client, "iter_tx_transfers", None)
+    # Dağıtım kuralı yalnız işlem akışı olan adaptörde (Solana) uygulanır; EVM davranışı değişmez.
+    groups: Iterable[list[TransferEvent]]
     if per_tx:
-        groups: Iterable[list[TransferEvent]] = per_tx(token, from_block, latest)
+        groups = per_tx(token, from_block, latest)
     else:
-        groups = _tx_groups(client.token_transfers(token, from_block, latest))
+        groups = ([e] for e in client.token_transfers(token, from_block, latest))
     # Adaptör alım kaynağını ayırt edebiliyorsa (Solana: eğri dışı PDA gönderen) cüzdandan
     # cüzdana transferler alım sayılmaz; yoksa (EVM) süzme yok — davranış değişmez.
     is_market = getattr(client, "is_market_sender", None)

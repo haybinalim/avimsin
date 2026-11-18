@@ -40,7 +40,7 @@ ve maliyet modeli eksiktir.
 **Dağıtım ayrımı:** aynı işlemde aynı göndericiden `DISTRIBUTION_MIN_RECEIVERS` (varsayılan 3) veya
 daha fazla farklı alıcıya giden transferler içeriden dağıtım (dev/bundle) sayılır; bu alıcılar
 erken alıcı olmaz (scan "N dağıtım alıcısı atlandı" yazar). Her cüzdana ayrı işlemle yapılan
-dağıtım bu kuralla yakalanmaz.
+dağıtım bu kuralla yakalanmaz. Kural yalnız Solana'da geçerlidir; EVM yolu değişmedi.
 
 **Alım tanımı (Solana):** alım yalnız gönderen token sahibi eğri DIŞI bir adresse (PDA: bonding
 curve / havuz vault sahibi) sayılır; eğri üstü normal cüzdandan gelen cüzdandan cüzdana transferdir,
