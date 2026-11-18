@@ -11,6 +11,8 @@ WorkingDirectory=APP_DIR
 ExecStart=APP_DIR/.venv/bin/avimsin-watch --chain CHAIN_NAME --db APP_DIR/data/avimsin.sqlite
 # .env WorkingDirectory'den okunur (python-dotenv); ayrıca dosya olarak da verilir.
 EnvironmentFile=-APP_DIR/.env
+# stdout tamponlanmasın: journal'da tur satırları anında görünsün.
+Environment=PYTHONUNBUFFERED=1
 Restart=always
 RestartSec=10
 # RPC 429/backoff pencereleri + saatlik taramalar: servisi öldürme, beklesin.

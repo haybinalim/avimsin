@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS watch_cursor (
     chain TEXT PRIMARY KEY,
     last_block INTEGER NOT NULL
 );
+-- Solana cüzdan bazlı izleme: cüzdan başına son görülen imza (boş string: henüz işlem yok).
+CREATE TABLE IF NOT EXISTS watch_wallet_cursor (
+    chain TEXT NOT NULL,
+    wallet TEXT NOT NULL,
+    last_signature TEXT NOT NULL,
+    last_slot INTEGER NOT NULL,
+    PRIMARY KEY (chain, wallet)
+);
 CREATE TABLE IF NOT EXISTS watch_inflows (
     chain TEXT NOT NULL,
     coin TEXT NOT NULL,
