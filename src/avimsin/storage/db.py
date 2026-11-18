@@ -94,6 +94,11 @@ CREATE TABLE IF NOT EXISTS analysis_windows (
     to_block INTEGER NOT NULL,
     complete INTEGER NOT NULL
 );
+-- Solana getTransaction önbelleği (salt-eklemeli): yalnız gereken alanlar; sonlanmış işlem değişmez.
+CREATE TABLE IF NOT EXISTS sol_tx_cache (
+    signature TEXT PRIMARY KEY,
+    body TEXT NOT NULL
+);
 """
 
 # Faz 2'den önce oluşturulan veritabanlarına verdict kolonlarını ekler.
