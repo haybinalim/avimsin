@@ -34,6 +34,10 @@ class Settings:
     watch_solana_mode: str = "wallet"
     # Cüzdan bazlı izleme: cüzdan başına tur başına en çok açılacak yeni işlem.
     watch_max_tx_per_wallet_poll: int = 50
+    # Canlı izleme yüksek frekans kuralı: son bot_window içinde bundan FAZLA farklı giriş
+    # kaydı olan cüzdan sinyal sayımına katılmaz (kalıcı işaret yok; pencere kayınca döner).
+    watch_bot_window_seconds: int = 3600
+    watch_bot_max_inflows: int = 10
     # Giriş sayılmayan mint'ler (wSOL, USDC, USDT).
     watch_ignored_mints: tuple[str, ...] = (
         "So11111111111111111111111111111111111111112",
@@ -70,6 +74,8 @@ class Settings:
         return cls(
             watch_solana_mode=os.environ.get("WATCH_SOLANA_MODE", "wallet").strip().lower(),
             watch_max_tx_per_wallet_poll=int(os.environ.get("WATCH_MAX_TX_PER_WALLET_POLL", "50")),
+            watch_bot_window_seconds=int(os.environ.get("WATCH_BOT_WINDOW_SECONDS", "3600")),
+            watch_bot_max_inflows=int(os.environ.get("WATCH_BOT_MAX_INFLOWS", "10")),
             **extra,
             rpc_endpoints=rpc,
             smart_wallet_signal_threshold=threshold,

@@ -110,6 +110,12 @@ tüm cüzdanlar hata verirse tur RPC hatası sayılır (`--once` çıkış kodu 
 adresini ve DexScreener bağlantısını içerir. Eski coin bazlı yol için `WATCH_SOLANA_MODE=coin`;
 EVM her zaman coin bazlıdır. Servis `PYTHONUNBUFFERED=1` ile çalışır (journal'da satırlar anında görünür).
 Yeniden denemeden sonra da okunamayan işlem uyarıyla atlanır (cüzdan kilitlenmesin diye; scan yoluyla aynı), sayısı özet satırında `atlanan` olarak görünür. Kayıp riski: atlanan işlemdeki bir giriş sinyale girmez.
+**Yüksek frekans kuralı (cüzdan modu).** Son `WATCH_BOT_WINDOW_SECONDS` (3600) içinde
+`WATCH_BOT_MAX_INFLOWS` (10) sayısından FAZLA farklı giriş kaydı (`watch_inflows`, slot bazlı) olan
+cüzdan sinyal sayımına katılmaz; girişleri yine kaydedilir, yalnız sayımdan süzülür. Kalıcı bot
+işareti yoktur: pencere kayınca cüzdan kendiliğinden döner. Dışlananların sayısı tur özetinde
+(`B bot-dışı`), ilk dışlanmada adresi tek log satırında görünür. Öneri (uygulanmadı): sürekli
+dışlanan cüzdanları `coin_verdicts`'e kalıcı `bot` olarak yazan ayrı bir yol eklenebilir.
 Aşağıdaki açıklama coin bazlı yol (EVM) içindir.
 
 `watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Smart wallet: seçili zincirde en az bir coin'de `verdict=ok`

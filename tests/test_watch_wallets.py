@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import dataclasses
+import itertools
+
+import pytest
+
+from avimsin.alerts import watcher as watcher_mod
+from avimsin.config import settings as base_settings
 from avimsin.alerts.watcher import WatchRpcError, format_signal, watch_loop
 from avimsin.chains.solana import SolanaAdapter, SolanaClient
 from avimsin.storage.db import connect, save_coin, save_purchase, save_verdict
 from tests.fake_solana import FakeSolanaChain, make_balance_tx
-
-import pytest
 
 KNOWN = "K" * 44  # coins tablosundaki (taranmış) coin
 NEW = "N" * 44  # coins'te OLMAYAN yeni mint
@@ -269,3 +274,95 @@ def test_unreadable_tx_is_skipped_cursor_advances(monkeypatch, capsys) -> None:
     assert cur == "u1"  # cursor ilerledi, cüzdan kilitlenmedi
     assert _inflow_count(conn) == 1  # okunabilen işlem sayıldı
     assert adapter.unreadable == []  # tur sonunda temizlendi
+
+
+# --- Yüksek frekans (bot) kuralı ---
+
+LATEST = 100_000
+
+
+def seed(conn, wallet: str, n: int, slot: int = LATEST - 10, prefix: str = "f") -> None:
+    for i in range(n):
+        conn.execute(
+            "INSERT INTO watch_inflows (chain, coin, wallet, first_block, last_block)"
+            " VALUES ('solana', ?, ?, ?, ?)",
+            (f"{prefix}{wallet[0]}{i}", wallet, slot, slot),
+        )
+    conn.commit()
+
+
+def seed_target(conn, wallets, mint: str = NEW, slot: int = LATEST - 10) -> None:
+    for w in wallets:
+        conn.execute(
+            "INSERT INTO watch_inflows (chain, coin, wallet, first_block, last_block)"
+            " VALUES ('solana', ?, ?, ?, ?)",
+            (mint, w, slot, slot),
+        )
+    conn.commit()
+
+
+def quiet_chain() -> FakeSolanaChain:
+    return base_chain(latest_slot=LATEST)
+
+
+def test_bot_boundary_10_counts_11_excluded() -> None:
+    # Hedef mint dahil toplam kayıt: 9 + 1 = 10 (katılır), 10 + 1 = 11 (dışlanır).
+    for extra, expected in ((9, 1), (10, 0)):
+        conn = make_db()
+        chain = quiet_chain()
+        run(chain, conn)  # cursor'lar
+        seed(conn, WALLETS[0], extra)
+        seed_target(conn, WALLETS)
+        run(chain, conn, threshold=3)
+        got = conn.execute("SELECT COUNT(*) FROM watch_alerts").fetchone()[0]
+        assert got == (1 if expected else 0)
+
+
+def test_old_inflows_outside_bot_window_not_counted(monkeypatch) -> None:
+    monkeypatch.setattr(
+        watcher_mod, "settings", dataclasses.replace(base_settings, watch_bot_window_seconds=600)
+    )  # 600 s = 1500 slot; eski girişler 5000 slot önce
+    conn = make_db()
+    chain = quiet_chain()
+    run(chain, conn)
+    seed(conn, WALLETS[0], 30, slot=LATEST - 5000)
+    seed_target(conn, WALLETS)
+    run(chain, conn, threshold=3)
+    assert conn.execute("SELECT COUNT(*) FROM watch_alerts").fetchone()[0] == 1
+
+
+def test_excluded_wallet_drops_mint_below_threshold_and_inflows_kept() -> None:
+    conn = make_db()
+    chain = quiet_chain()
+    run(chain, conn)
+    seed(conn, WALLETS[0], 15)
+    seed_target(conn, WALLETS)
+    before = conn.execute("SELECT COUNT(*) FROM watch_inflows").fetchone()[0]
+    assert run(chain, conn, threshold=3) == 0
+    assert conn.execute("SELECT COUNT(*) FROM watch_alerts").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM watch_inflows").fetchone()[0] == before  # veri kaybı yok
+
+
+def test_bot_log_printed_once_and_count_in_summary(capsys) -> None:
+    conn = make_db()
+    chain = quiet_chain()
+    run(chain, conn)
+    seed(conn, WALLETS[0], 15)
+    capsys.readouterr()
+    adapter = adapter_for(chain)
+    rounds = itertools.count()
+
+    def fake_sleep(_s):
+        if next(rounds) >= 2:
+            raise KeyboardInterrupt
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(watcher_mod.time, "sleep", fake_sleep)
+    try:
+        with pytest.raises(KeyboardInterrupt):
+            watch_loop(adapter, conn, threshold=3, telegram=None, chain="solana", poll_seconds=0)
+    finally:
+        monkey.undo()
+    out = capsys.readouterr().out
+    assert out.count(f"BOT-DIŞI: {WALLETS[0]}") == 1  # 3 tur, 1 log
+    assert out.count("1 bot-dışı") == 3

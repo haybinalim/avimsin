@@ -163,8 +163,12 @@ def _pending_signals(
     threshold: int,
     window_blocks: int,
     cooldown_blocks: int,
+    excluded: set[str] | None = None,
 ) -> list[Signal]:
-    """Pencere + bildirim kaydından gönderilmesi gereken sinyalleri türetir."""
+    """Pencere + bildirim kaydından gönderilmesi gereken sinyalleri türetir.
+
+    ``excluded`` cüzdanlar (yüksek frekans) sayıma katılmaz; girişleri silinmez.
+    """
     conn.execute(
         "DELETE FROM watch_inflows WHERE chain = ? AND last_block < ?",
         (chain, latest - window_blocks),
@@ -178,6 +182,8 @@ def _pending_signals(
     for coin, wallet, first in conn.execute(
         "SELECT coin, wallet, first_block FROM watch_inflows WHERE chain = ?", (chain,)
     ):
+        if excluded and wallet in excluded:
+            continue
         in_window.setdefault(coin, {})[wallet] = first
     signals = []
     for coin, per_wallet in sorted(in_window.items()):
@@ -202,6 +208,20 @@ def _pending_signals(
             )
         )
     return signals
+
+
+def high_frequency_wallets(
+    conn: sqlite3.Connection, chain: str, latest: int, window_blocks: int, max_inflows: int
+) -> set[str]:
+    """Son ``window_blocks`` içinde ``max_inflows``'tan FAZLA farklı giriş kaydı olan cüzdanlar."""
+    return {
+        r[0]
+        for r in conn.execute(
+            "SELECT wallet FROM watch_inflows WHERE chain = ? AND last_block >= ?"
+            " GROUP BY wallet HAVING COUNT(DISTINCT coin) > ?",
+            (chain, latest - window_blocks, max_inflows),
+        )
+    }
 
 
 def _mark_alerted(conn: sqlite3.Connection, chain: str, signal: Signal, latest: int) -> None:
@@ -448,6 +468,10 @@ def watch_loop(
         )
     if max_tx_per_wallet is None:
         max_tx_per_wallet = settings.watch_max_tx_per_wallet_poll
+    bot_window_blocks = _blocks_for(settings.watch_bot_window_seconds, chain)
+    bot_max = settings.watch_bot_max_inflows
+    excluded: set[str] = set()
+    bot_logged: set[str] = set()
     sent = 0
     last_block = _load_cursor(conn, chain)
     if last_block is None:
@@ -477,10 +501,21 @@ def watch_loop(
                 if latest > last_block:
                     last_block = latest
                     _save_cursor(conn, chain, last_block)
+                excluded = high_frequency_wallets(
+                    conn, chain, max(latest, last_block), bot_window_blocks, bot_max
+                )
+                for w in sorted(excluded - bot_logged):
+                    print(
+                        f"BOT-DIŞI: {w} son {settings.watch_bot_window_seconds} s içinde"
+                        f" {bot_max}'dan fazla giriş; sinyal sayımından çıkarıldı.",
+                        flush=True,
+                    )
+                bot_logged = set(excluded)  # dönen cüzdan yeniden dışlanırsa tekrar loglanır
                 note = " (smart wallet kümesi boş)" if not smart_wallets else ""
                 print(
                     f"tur: {stats.wallets} cüzdan, {stats.new_tx} yeni işlem,"
                     f" {stats.inflows} giriş, {stats.errors} hata, {stats.skipped} atlanan,"
+                    f" {len(excluded)} bot-dışı,"
                     f" {time.monotonic() - round_started:.1f} s{note}",
                     flush=True,
                 )
@@ -535,7 +570,12 @@ def watch_loop(
             rpc_failures = 0
 
         now = max(latest, last_block)
-        for signal in _pending_signals(conn, chain, now, threshold, window_blocks, cooldown_blocks):
+        if wallet_mode and rpc_error is not None:  # tur düştüyse son süzmeyi DB'den yeniden kur
+            excluded = high_frequency_wallets(conn, chain, now, bot_window_blocks, bot_max)
+        for signal in _pending_signals(
+            conn, chain, now, threshold, window_blocks, cooldown_blocks,
+            excluded if wallet_mode else None,
+        ):
             text = format_signal(signal, threshold, "solana" if chain == "solana" else None)
             if telegram is not None:
                 try:
