@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import argparse
 
-from .chains import open_chain
+from .chains import attach_tx_cache, open_chain, report_unreadable
 from .chains.protocol import ChainClient
 from .filters.base import VERDICT_BOT, VERDICT_DUMP, VERDICT_OK, WalletHistory
 from .filters.bot_rules import ContractRule, HighFrequencyRule, RoundTripRule
@@ -24,8 +24,10 @@ from .storage.db import (
     LEGACY_NOTE,
     check_coin_chain,
     has_coin_results,
+    load_window,
     normalize_address,
     save_verdict,
+    save_window,
     set_chain,
 )
 from .window import resolve_window
@@ -81,18 +83,60 @@ def main() -> None:
         if not has_coin_results(conn):
             print(LEGACY_NOTE)
 
+        capped: set[str] = set()
+        capped_limit = 0
+        signature_counts: dict[str, int] | None = None
         with open_chain(chain) as client:
+            old_window = load_window(conn, coin)
             window = resolve_window(
                 conn, coin, chain, client.block_number, args.from_block, args.to_block
             )
             for line in window.notes:
                 print(line)
-            events = client.token_transfers(coin, window.from_block, window.to_block)
+            wallet_fetch = getattr(client, "wallet_transfers", None)
             histories: dict[str, WalletHistory] = {}
-            for wallet in wallets:
-                relevant = [e for e in events if e.frm == wallet or e.to == wallet]
-                histories[wallet] = WalletHistory(
-                    wallet=wallet, transfers=relevant, is_contract=_is_contract(client, wallet)
+            try:
+                if wallet_fetch is not None:
+                    # İşlem önbelleği ayrı bağlantıyla yazar (SQLite tek yazar): ana bağlantıdaki
+                    # bekleyen pencere yazımı önce commit edilir; hata olursa aşağıda geri alınır.
+                    conn.commit()
+                    attach_tx_cache(client, args.db)
+                    purchase_txs: dict[str, list[str]] = {}
+                    for w, t in conn.execute("SELECT wallet, tx FROM purchases WHERE coin = ?", (coin,)):
+                        purchase_txs.setdefault(w, []).append(t)
+                    fetched = wallet_fetch(
+                        coin, wallets, window.from_block, window.to_block, purchase_txs
+                    )
+                    events = fetched.events
+                    capped, capped_limit = fetched.capped, fetched.limit
+                    signature_counts = fetched.signature_counts
+                    report_unreadable(client)
+                else:
+                    events = client.token_transfers(coin, window.from_block, window.to_block)
+                for wallet in wallets:
+                    if wallet in capped:
+                        histories[wallet] = WalletHistory(wallet=wallet)
+                        continue
+                    relevant = [e for e in events if e.frm == wallet or e.to == wallet]
+                    histories[wallet] = WalletHistory(
+                        wallet=wallet, transfers=relevant, is_contract=_is_contract(client, wallet)
+                    )
+            except BaseException:
+                if wallet_fetch is not None:
+                    # Pencere yalnız başarılı bir çalıştırmayla kalıcı olsun (eski davranış: rollback).
+                    if old_window is None:
+                        conn.execute("DELETE FROM analysis_windows WHERE coin = ?", (coin,))
+                    else:
+                        save_window(conn, coin, *old_window)
+                    conn.commit()
+                raise
+
+        if signature_counts is not None:
+            silent = sum(1 for w in wallets if signature_counts.get(w, 0) == 0)
+            if silent * 2 > len(wallets):
+                print(
+                    f"UYARI: {silent}/{len(wallets)} alıcının ATA'sında pencerede hiç işlem yok; "
+                    "ATA türetimi ya da pencere hatalı olabilir, sonuçlara güvenmeyin."
                 )
 
         rules = [
@@ -108,7 +152,10 @@ def main() -> None:
                 verdict = VERDICT_OK if hist.transfers else None
                 rule_name = "-"
                 reason = "tüm kurallardan geçti" if hist.transfers else "pencerede transfer yok; bilinmiyor"
-                if hist.transfers:
+                if wallet in capped:
+                    verdict, rule_name = VERDICT_BOT, HighFrequencyRule.name
+                    reason = f"pencerede ≥{capped_limit + 1} işlem (ATA imzaları; işlemler açılmadı)"
+                elif hist.transfers:
                     for rule in rules:
                         result = rule.check(hist)
                         if result is not None:
