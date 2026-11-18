@@ -280,6 +280,7 @@ class WalletRound:
     new_tx: int = 0
     inflows: int = 0
     errors: int = 0
+    skipped: int = 0
 
 
 def _load_wallet_cursor(conn: sqlite3.Connection, chain: str, wallet: str) -> str | None:
@@ -336,12 +337,20 @@ def _scan_wallet(
         entries = entries[:max_tx]
     found: dict[str, int] = {}  # mint -> en erken slot
     opened = 0
+    skipped = 0
     for entry in entries:  # en yeni önce
         if entry.get("err") is not None:
             continue
         tx = client.get_transaction(entry["signature"])
         if tx is None:
-            raise RuntimeError(f"işlem okunamadı: {entry['signature'][:8]}")
+            # Yeniden denemeden sonra da okunamadı: cüzdanı kilitlememek için atlanır
+            # (scan yoluyla aynı); kayıp riski README'de. Sayı tur özetinde görünür.
+            skipped += 1
+            print(
+                f"UYARI: {wallet} işlemi okunamadı, atlandı: {entry['signature'][:8]}",
+                flush=True,
+            )
+            continue
         opened += 1
         slot = int(entry["slot"])
         for mint in tx_inflow_mints(tx, wallet, ignored):
@@ -351,6 +360,7 @@ def _scan_wallet(
     _save_wallet_cursor(conn, chain, wallet, entries[0]["signature"], int(entries[0]["slot"]))
     conn.commit()
     stats.new_tx += opened
+    stats.skipped += skipped
     stats.inflows += len(found)
 
 
@@ -370,6 +380,9 @@ def scan_wallets(
                 f"HATA: {wallet} taranamadı ({_describe_error(exc)}); cursor ilerlemedi.",
                 flush=True,
             )
+    unreadable = getattr(client, "unreadable", None)
+    if isinstance(unreadable, list):
+        unreadable.clear()  # daemon'da sınırsız büyümesin
     return stats
 
 
@@ -467,7 +480,7 @@ def watch_loop(
                 note = " (smart wallet kümesi boş)" if not smart_wallets else ""
                 print(
                     f"tur: {stats.wallets} cüzdan, {stats.new_tx} yeni işlem,"
-                    f" {stats.inflows} giriş, {stats.errors} hata,"
+                    f" {stats.inflows} giriş, {stats.errors} hata, {stats.skipped} atlanan,"
                     f" {time.monotonic() - round_started:.1f} s{note}",
                     flush=True,
                 )

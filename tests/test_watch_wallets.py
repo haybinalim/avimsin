@@ -194,3 +194,78 @@ def test_evm_message_unchanged_and_no_link() -> None:
     assert "dexscreener" not in format_signal(sig, 3)
     assert "dexscreener" not in format_signal(sig, 3, None)
     assert "dexscreener" in format_signal(sig, 3, "solana")
+
+
+def _setup_one(extra: list[dict], txs: dict):
+    conn = make_db()
+    chain = base_chain()
+    run(chain, conn)
+    w = WALLETS[0]
+    chain.address_signatures[w][:0] = extra
+    chain.transactions.update(txs)
+    return conn, chain, w
+
+
+def _inflow_count(conn) -> int:
+    return conn.execute("SELECT COUNT(*) FROM watch_inflows").fetchone()[0]
+
+
+def test_net_zero_delta_not_counted() -> None:
+    w = WALLETS[0]
+    # Kendi hesapları arası transfer: toplam değişim 0.
+    tx = make_balance_tx(NEW, [(w, 10), (w, 0)], [(w, 0), (w, 10)])
+    conn, chain, _ = _setup_one([entry("t0", 1001)], {"t0": tx})
+    run(chain, conn)
+    assert _inflow_count(conn) == 0
+
+
+def test_multiple_accounts_same_mint_are_summed() -> None:
+    w = WALLETS[0]
+    # Üç hesap: 3->5 (+2), 0->7 (+7), 0->0; net +9.
+    tx = make_balance_tx(NEW, [(w, 3), (w, 0), (w, 0)], [(w, 5), (w, 7), (w, 0)])
+    conn, chain, _ = _setup_one([entry("t1", 1001)], {"t1": tx})
+    run(chain, conn)
+    assert _inflow_count(conn) == 1
+    # Son hesabın değeri yanıltıcıysa (net pozitif, son hesap azalıyor) yine giriş:
+    tx2 = make_balance_tx(NEW, [(w, 0), (w, 10)], [(w, 8), (w, 5)])  # +8, -5 = +3
+    conn2, chain2, _ = _setup_one([entry("t2", 1001)], {"t2": tx2})
+    run(chain2, conn2)
+    assert _inflow_count(conn2) == 1
+
+
+def test_new_ata_without_pre_record_counts() -> None:
+    w = WALLETS[0]
+    tx = make_balance_tx(NEW, [], [(w, 10)])
+    conn, chain, _ = _setup_one([entry("t3", 1001)], {"t3": tx})
+    run(chain, conn)
+    assert _inflow_count(conn) == 1
+
+
+def test_cap_opens_exactly_newest_n() -> None:
+    conn, chain, w = _setup_one([], {})
+    new = [entry(f"c{i}", 1010 - i) for i in range(5)]  # c0 en yeni
+    chain.address_signatures[w][:0] = new
+    for e in new:
+        chain.transactions[e["signature"]] = inflow_tx(NEW, w)
+    run(chain, conn, max_tx_per_wallet=2)
+    opened = {p[0] for m, p in chain.calls if m == "getTransaction"}
+    assert opened == {"c0", "c1"}
+
+
+def test_unreadable_tx_is_skipped_cursor_advances(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("avimsin.chains.solana.time.sleep", lambda s: None)
+    w = WALLETS[0]
+    conn, chain, _ = _setup_one(
+        [entry("u1", 1001), entry("u2", 1002)], {"u2": inflow_tx(NEW, w)}
+    )
+    chain.null_first["u1"] = 100  # hep null
+    adapter = adapter_for(chain)
+    watch_loop(adapter, conn, once=True, threshold=3, telegram=None, chain="solana")
+    out = capsys.readouterr().out
+    assert "1 atlanan" in out and "0 hata" in out
+    cur = conn.execute(
+        "SELECT last_signature FROM watch_wallet_cursor WHERE wallet = ?", (w,)
+    ).fetchone()[0]
+    assert cur == "u1"  # cursor ilerledi, cüzdan kilitlenmedi
+    assert _inflow_count(conn) == 1  # okunabilen işlem sayıldı
+    assert adapter.unreadable == []  # tur sonunda temizlendi

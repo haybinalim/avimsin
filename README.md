@@ -109,6 +109,7 @@ ilerlemez. Her tur tek satır özet basar: `tur: N cüzdan, M yeni işlem, K gir
 tüm cüzdanlar hata verirse tur RPC hatası sayılır (`--once` çıkış kodu 1). Sinyal mesajı mint
 adresini ve DexScreener bağlantısını içerir. Eski coin bazlı yol için `WATCH_SOLANA_MODE=coin`;
 EVM her zaman coin bazlıdır. Servis `PYTHONUNBUFFERED=1` ile çalışır (journal'da satırlar anında görünür).
+Yeniden denemeden sonra da okunamayan işlem uyarıyla atlanır (cüzdan kilitlenmesin diye; scan yoluyla aynı), sayısı özet satırında `atlanan` olarak görünür. Kayıp riski: atlanan işlemdeki bir giriş sinyale girmez.
 Aşağıdaki açıklama coin bazlı yol (EVM) içindir.
 
 `watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Smart wallet: seçili zincirde en az bir coin'de `verdict=ok`
