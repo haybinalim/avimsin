@@ -170,7 +170,7 @@ def print_usage() -> int:
     if not providers:
         print("Tanımlı Solana RPC sağlayıcısı yok.")
         return 1
-    store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", "data/rpc_usage.sqlite"))
+    store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", rpc_pool.DEFAULT_USAGE_DB))
     print(f"{'AD':<24}{'PROFİL':<12}{'KULLANIM/KOTA':<26}{'YÜZDE':<8}{'DÖNEM BİTİŞİ':<18}TÜKENMİŞ")
     print("-" * 96)
     for p in providers:
@@ -203,9 +203,21 @@ def main() -> None:
     gates: dict = {}
     if any(n.startswith("solana") for n in endpoints):
         try:
-            providers = _solana_providers()
+            providers = []
+            for n, u in endpoints.items():
+                if not n.startswith("solana"):
+                    continue
+                try:
+                    providers += rpc_pool.build_providers(
+                        {n: u}, getattr(settings, "rpc_options", {}),
+                        getattr(settings, "solana_min_interval_seconds", 0.9),
+                    )
+                except ValueError as exc:
+                    # Tanınmayan sağlayıcı: ölçüm sayaçsız yapılır, havuz bunu REDDEDER.
+                    print(f"UYARI: {exc}")
             if any(p.quota is not None for p in providers):
-                store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", "data/rpc_usage.sqlite"))
+                store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", rpc_pool.DEFAULT_USAGE_DB))
+                store.warn_if_new(providers)
                 gates = {p.name: _gate_for(p, store) for p in providers}
         except (ValueError, rpc_pool.RpcUsageError):
             print("HATA: RPC havuz ayarı/kota sayacı kurulamadı; Solana uçları ölçülmedi")

@@ -17,6 +17,7 @@ import sqlite3
 import sys
 import time
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -28,8 +29,9 @@ DB_RETRIES = 3
 DB_RETRY_WAIT = 0.2
 
 # 429 gövdesinde bunlardan biri varsa sağlayıcı dönem sonuna kadar tükenmiş sayılır.
-QUOTA_MARKERS = ("max usage", "quota", "monthly", "capacity limit", "credits")
+QUOTA_MARKERS = ("max usage", "monthly limit", "monthly capacity limit", "quota exceeded", "exceeded your")
 
+DEFAULT_USAGE_DB = "data/rpc_usage.sqlite"
 PROFILE_ORDER = ("helius", "chainstack", "drpc", "alchemy", "public")
 
 
@@ -57,10 +59,14 @@ PROFILES: dict[str, Profile] = {
 
 URL_HINTS = (
     ("helius-rpc.com", "helius"),
+    ("rpc.helius.xyz", "helius"),
     ("chainstack.com", "chainstack"),
+    ("p2pify.com", "chainstack"),
     ("drpc.org", "drpc"),
     ("alchemy.com", "alchemy"),
 )
+# Yalnız bunlar OTOMATİK kotasız (public) sayılır; başka alan adı açık _PROFILE ister.
+PUBLIC_HOSTS = ("api.mainnet-beta.solana.com", "api.devnet.solana.com", "api.testnet.solana.com")
 
 
 class RpcUsageError(RuntimeError):
@@ -75,16 +81,18 @@ def _log(message: str) -> None:
     print(f"[rpc] {message}", file=sys.stderr, flush=True)
 
 
-def guess_profile(url: str) -> str:
-    """URL ana makinesinden profil tahmini; tahmin edilemezse public."""
+def guess_profile(url: str) -> str | None:
+    """URL ana makinesinden profil; tanınmayan alan adı için None (sessizce public SAYILMAZ)."""
     try:
         host = (urlparse(url).hostname or "").lower()
     except ValueError:
+        return None
+    if host in PUBLIC_HOSTS:
         return "public"
     for hint, profile in URL_HINTS:
         if host == hint or host.endswith("." + hint):
             return profile
-    return "public"
+    return None
 
 
 def provider_id(url: str) -> str:
@@ -103,6 +111,7 @@ class Provider:
     default_cost: int
     costs: dict[str, int] = field(default_factory=dict)
     min_interval: float = 0.0
+    period_anchor: float | None = None  # hesabın yenilenme günü (epoch, UTC 00:00)
     id: str = ""
     # süreç içi durum
     last_call: float | None = None
@@ -122,6 +131,12 @@ class Provider:
         if self.quota is None:
             return None
         return self.quota * HARD_LIMIT_PERCENT // 100
+
+    def period_start_for(self, now: float) -> float | None:
+        """Çapa varsa `now`ı içeren dönemin başlangıcı; yoksa None (ilk kullanım)."""
+        if self.period_anchor is None:
+            return None
+        return self.period_anchor + ((now - self.period_anchor) // self.period_seconds) * self.period_seconds
 
     @property
     def period_seconds(self) -> float:
@@ -144,7 +159,13 @@ def build_providers(
     for name, url in endpoints.items():
         if not name.startswith(prefix):
             continue
-        profile_name = (_opt(options, name, "profile") or guess_profile(url)).lower()
+        profile_name = _opt(options, name, "profile") or guess_profile(url)
+        if profile_name is None:
+            raise ValueError(
+                f"RPC_{name.upper()}: sağlayıcı tanınmadı; RPC_{name.upper()}_PROFILE "
+                f"açıkça verin ({', '.join(PROFILE_ORDER)}; kotasız kullanım için public)"
+            )
+        profile_name = profile_name.lower()
         if profile_name not in PROFILES:
             raise ValueError(
                 f"RPC_{name.upper()}_PROFILE geçersiz (geçerli: {', '.join(PROFILE_ORDER)})"
@@ -161,6 +182,13 @@ def build_providers(
             raise ValueError(f"RPC_{name.upper()}_QUOTA/_RPS/_PERIOD_DAYS sayı olmalı") from None
         if (quota_v is not None and quota_v <= 0) or (rps_v is not None and rps_v <= 0) or days_v <= 0:
             raise ValueError(f"RPC_{name.upper()}_QUOTA/_RPS/_PERIOD_DAYS pozitif olmalı")
+        anchor = None
+        start_text = _opt(options, name, "period_start")
+        if start_text:
+            try:
+                anchor = datetime.strptime(start_text, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()
+            except ValueError:
+                raise ValueError(f"RPC_{name.upper()}_PERIOD_START YYYY-MM-DD olmalı") from None
         interval = 1.0 / rps_v if rps_v else 0.0
         if profile_name == "public" and not rps:
             interval = public_interval
@@ -168,7 +196,7 @@ def build_providers(
             Provider(
                 name=name, profile=profile_name, url=url, quota=quota_v, rps=rps_v,
                 period_days=days_v, default_cost=profile.default_cost,
-                costs=dict(profile.costs), min_interval=interval,
+                costs=dict(profile.costs), min_interval=interval, period_anchor=anchor,
             )
         )
     providers.sort(key=lambda p: (PROFILE_ORDER.index(p.profile), p.name))
@@ -195,6 +223,7 @@ class UsageStore:
         self.path = Path(path)
         self._wall = wall
         self._sleep = sleep
+        self.created = not self.path.exists()
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             with self._connect() as conn:
@@ -205,6 +234,12 @@ class UsageStore:
                 )
         except (sqlite3.Error, OSError):
             raise RpcUsageError("RPC kota sayacı açılamadı") from None
+
+    def warn_if_new(self, providers: list[Provider]) -> None:
+        """Sayaç DB'si yeni oluştuysa ve kotalı sağlayıcı varsa tek seferlik uyarı."""
+        if self.created and any(p.quota is not None for p in providers):
+            self.created = False
+            _log("UYARI: kullanım sayacı sıfırdan başladı; sağlayıcı panelinden kullanımı kontrol edin")
 
     def _connect(self) -> sqlite3.Connection:
         return sqlite3.connect(self.path, timeout=10.0, isolation_level=None)
@@ -235,12 +270,17 @@ class UsageStore:
         row = conn.execute(
             "SELECT period_start, units FROM rpc_usage WHERE provider=?", (provider.id,)
         ).fetchone()
-        if row is None or now >= row[0] + provider.period_seconds:
+        aligned = provider.period_start_for(now)
+        expired = row is None or (
+            row[0] != aligned if aligned is not None else now >= row[0] + provider.period_seconds
+        )
+        if expired:
+            start = now if aligned is None else aligned
             conn.execute(
                 "INSERT OR REPLACE INTO rpc_usage(provider, period_start, units) VALUES (?,?,0)",
-                (provider.id, now),
+                (provider.id, start),
             )
-            return now, 0
+            return start, 0
         return row[0], row[1]
 
     def reserve(self, provider: Provider, cost: int) -> tuple[bool, int, int, float]:
@@ -288,7 +328,11 @@ class UsageStore:
                 ).fetchone()
         except sqlite3.Error:
             raise RpcUsageError("RPC kota sayacı okunamadı") from None
-        if row is None or self._wall() >= row[0] + provider.period_seconds:
+        now = self._wall()
+        aligned = provider.period_start_for(now)
+        if row is None or (
+            row[0] != aligned if aligned is not None else now >= row[0] + provider.period_seconds
+        ):
             return 0, None
         return row[1], row[0] + provider.period_seconds
 
@@ -379,5 +423,6 @@ def build_pool(settings_obj) -> RpcPool | None:
     # Kotasız (public) uçlarda sayaç yok: DB dosyası da açılmaz.
     store = None
     if any(p.quota is not None for p in providers):
-        store = UsageStore(getattr(settings_obj, "rpc_usage_db", "data/rpc_usage.sqlite"))
+        store = UsageStore(getattr(settings_obj, "rpc_usage_db", DEFAULT_USAGE_DB))
+        store.warn_if_new(providers)
     return RpcPool(providers, store)

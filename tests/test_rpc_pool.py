@@ -75,6 +75,9 @@ def test_profile_guess_and_override():
     assert got == {"solana_a": "helius", "solana_b": "chainstack", "solana_c": "drpc",
                    "solana_d": "alchemy", "solana_e": "public", "solana_f": "drpc"}
     assert [p.profile for p in ps] == ["helius", "chainstack", "drpc", "drpc", "alchemy", "public"]
+    old = providers({"solana_a": "https://rpc.helius.xyz/?api-key=k",
+                     "solana_b": "https://nd-1.p2pify.com/k"})
+    assert [p.profile for p in old] == ["helius", "chainstack"]
     assert next(p for p in ps if p.name == "solana_e").quota == 50
 
 
@@ -239,8 +242,8 @@ def test_no_url_or_key_in_logs_errors_or_db(tmp_path, clock, capsys):
     def handler(request):
         return httpx.Response(404, text=SECRET)
     client, pool, store, _ = make(
-        tmp_path, {"solana_a": SECRET, "solana_b": SECRET2}, {"solana_a_quota": "100"},
-        handler=handler)
+        tmp_path, {"solana_a": SECRET, "solana_b": SECRET2},
+        {"solana_a_quota": "100", "solana_b_profile": "public"}, handler=handler)
     with pytest.raises(RuntimeError) as e:
         client.get_slot()
     assert "404" in str(e.value)
@@ -361,3 +364,64 @@ def test_rpc_check_measurement_counts_against_quota(tmp_path, monkeypatch, capsy
     rpc_check.main()
     p = rpc_check._solana_providers()[0]
     assert UsageStore(db).read(p)[0] == 2
+
+
+# ---- denetim düzeltmeleri ----
+
+def test_unknown_host_without_profile_is_error_without_url():
+    with pytest.raises(ValueError) as e:
+        providers({"solana_q": SECRET2})
+    assert "KEY456" not in str(e.value) and "quiknode" not in str(e.value)
+    assert "_PROFILE" in str(e.value)
+    ok = providers({"solana_q": SECRET2}, {"solana_q_profile": "public"})
+    assert ok[0].profile == "public" and ok[0].quota is None
+
+
+def test_single_unknown_host_connect_raises(monkeypatch):
+    fake = SimpleNamespace(rpc_endpoints={"solana_q": SECRET2}, rpc_options={},
+                           solana_min_interval_seconds=0.9, rpc_usage_db="x")
+    monkeypatch.setattr(solana, "settings", fake)
+    with pytest.raises(ValueError):
+        solana.connect()
+
+
+@pytest.mark.parametrize("host", ["api.mainnet-beta.solana.com", "api.devnet.solana.com",
+                                  "api.testnet.solana.com"])
+def test_known_public_hosts_auto_public(host):
+    assert providers({"solana_p": f"https://{host}"})[0].profile == "public"
+
+
+def test_quota_markers_are_narrow():
+    from avimsin.chains.rpc_pool import is_quota_body
+    assert is_quota_body("Max usage reached") and is_quota_body("Monthly capacity limit exceeded")
+    assert not is_quota_body("per-second quota rate limit, credits per second")
+
+
+def test_period_start_aligns_period(tmp_path):
+    wall = Wall()  # 1_000_000 sn ~ 1970-01-12
+    p = providers({"solana_a": SECRET},
+                  {"solana_a_quota": "100", "solana_a_period_start": "1970-01-01"})[0]
+    store = UsageStore(tmp_path / "u.sqlite", wall=wall)
+    store.reserve(p, 50)
+    assert store.read(p)[0] == 50
+    _, end = store.read(p)
+    assert end == 30 * 86400          # çapa 1970-01-01 + 30 gün
+    wall.t = end + 1                  # yeni hizalı dönem
+    assert store.read(p) == (0, None)
+    assert store.reserve(p, 1)[0] and store.read(p)[1] == 60 * 86400
+
+
+def test_new_counter_db_warns_once(tmp_path, capsys):
+    ps = providers({"solana_a": SECRET})
+    store = UsageStore(tmp_path / "new.sqlite", wall=Wall())
+    store.warn_if_new(ps)
+    store.warn_if_new(ps)
+    assert capsys.readouterr().err.count("sıfırdan başladı") == 1
+    UsageStore(tmp_path / "new.sqlite", wall=Wall()).warn_if_new(ps)  # var olan DB: uyarı yok
+    assert "sıfırdan" not in capsys.readouterr().err
+
+
+def test_default_usage_db_is_absolute():
+    from pathlib import Path
+    from avimsin.config import default_usage_db
+    assert Path(default_usage_db()).is_absolute()

@@ -6,6 +6,7 @@ Gizli bilgiler (API anahtarları, tokenlar) repoya ASLA yazılmaz.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
@@ -13,7 +14,17 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # `RPC_<AD>_<SONEK>` biçimli ek ayarlar uç değildir.
-RPC_OPTION_SUFFIXES = ("_profile", "_quota", "_rps", "_period_days")
+RPC_OPTION_SUFFIXES = ("_profile", "_quota", "_rps", "_period_days", "_period_start")
+
+
+def default_usage_db() -> str:
+    """Sayaç DB'si proje köküne göre mutlak yol (cwd'den bağımsız; servis ve tarama aynı dosyayı görür).
+
+    Kök bulunamazsa (kurulu paket) cwd'ye düşülür.
+    """
+    root = Path(__file__).resolve().parents[2]
+    base = root if (root / "pyproject.toml").exists() else Path.cwd()
+    return str(base / "data" / "rpc_usage.sqlite")
 
 
 @dataclass(frozen=True)
@@ -25,7 +36,7 @@ class Settings:
     # `RPC_SOLANA_ORDER`); uç sayılmaz. Anahtarlar küçük harf, `rpc_` öneksiz.
     rpc_options: dict[str, str] = field(default_factory=dict)
     # Kotalı sağlayıcıların ortak kullanım sayacı (süreçler arası paylaşılır).
-    rpc_usage_db: str = "data/rpc_usage.sqlite"
+    rpc_usage_db: str = field(default_factory=lambda: default_usage_db())
     smart_wallet_signal_threshold: int = 3
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -94,7 +105,7 @@ class Settings:
             **extra,
             rpc_endpoints=rpc,
             rpc_options=rpc_options,
-            rpc_usage_db=os.environ.get("RPC_USAGE_DB", "").strip() or "data/rpc_usage.sqlite",
+            rpc_usage_db=os.environ.get("RPC_USAGE_DB", "").strip() or default_usage_db(),
             smart_wallet_signal_threshold=threshold,
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),

@@ -245,6 +245,15 @@ varsayım), alchemy 40 CU (getAccountInfo 10, getSlot 20). Ücretli plana geçme
 bizde tutulur, sağlayıcı kalan kotayı API'den vermez. Birden çok kotasız/bilinmeyen uç
 tanımlarsanız hepsi `public` sayılır ve sırayla (kendi 0,9 sn aralığıyla) kullanılır.
 
+Sağlayıcı alan adı tanınmıyorsa (helius, chainstack/p2pify, drpc, alchemy ve resmî Solana
+public uçları dışında) `RPC_SOLANA_<AD>_PROFILE` açıkça verilmelidir; yoksa hata alınır
+(sessizce kotasız sayılmaz). Bilerek kotasız kullanım için `_PROFILE=public` yazın.
+`RPC_SOLANA_<AD>_PERIOD_START=YYYY-MM-DD`: panelden hesabın yenilenme gününü girin; dönem
+bu günden itibaren `_PERIOD_DAYS` katlarına hizalanır (verilmezse ilk kullanımdan itibaren).
+`RPC_USAGE_DB` varsayılanı proje köküne göre mutlak yoldur (`<kök>/data/rpc_usage.sqlite`).
+Sayaç DB'si yeni oluşursa "sayaç sıfırdan başladı" uyarısı basılır: dosyayı yedeğe alın
+(`deploy/backup.sh` ile birlikte) ve silmeyin; kaybolursa sağlayıcı panelinden kullanımı kontrol edin.
+
 Kullanımı görmek için (ağ isteği yok; URL basılmaz): `uv run avimsin-rpc --usage`.
 %80 ve %95'te log uyarısı basılır. `avimsin-rpc` ölçüm çağrıları da sayaca yazılır.
 
