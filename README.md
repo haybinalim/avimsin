@@ -189,6 +189,9 @@ uv run avimsin-scan <mint> [--from-block <slot>]   # Solana (varsayılan): erken
 uv run avimsin-filter <mint>    # alıcıları bot/kaçak satış kurallarından geçir
 uv run avimsin-score <mint>     # temiz cüzdanları winrate/P&L/frekans ile sırala
 uv run avimsin-watch            # sinyal izleyici (Telegram'a bildirir; varsayılan solana)
+uv run avimsin-discover --dry-run   # kurala uyan yeni Solana coin'lerini göster (yazmaz)
+uv run avimsin-discover         # adayları discovery_queue'ya ekle
+uv run avimsin-pipeline         # kuyruktan en çok 3 coin: scan -> filter -> score + Telegram özeti
 uv run avimsin-scan 0x<kontrat> --chain robinhood --from-block <blok>   # EVM örneği
 uv run pytest                 # test ağı (sahte EVM/Solana zincirleri, ağ yok)
 ```
@@ -201,6 +204,24 @@ verilmezse public devnet ucu kullanılır.
 `robinhood` ile) RPC sorgusundan önce net hata verilir. Kayıtlı zincir ile `--chain` uyuşmazsa scan/filter/score RPC sorgusundan önce
 durur. Zinciri bilinmeyen eski kayıtlarda `--chain` açıkça verilmelidir;
 başarılı işlemde kayıt tamamlanır. Watch bilinmeyen zincirli coinleri atlar.
+
+## Otomatik keşif (günlük tarama)
+
+`avimsin-discover` GeckoTerminal ve DexScreener'dan (anahtarsız) yeni Solana coin'lerini
+bulur; kural (ortam değişkenleri): yaş `DISCOVERY_MIN_AGE_DAYS`–`DISCOVERY_MAX_AGE_DAYS` (3–30 gün),
+piyasa değeri (yoksa FDV) ≥ `DISCOVERY_MIN_MCAP_USD`, likidite ≥ `DISCOVERY_MIN_LIQUIDITY_USD`,
+24s hacim ≥ `DISCOVERY_MIN_VOLUME_24H_USD`; stable/wSOL (`WATCH_IGNORED_MINTS`) hariç. Uyanlar
+`discovery_queue` tablosuna eklenir (`coins`'te ya da kuyrukta olan coin atlanır). Bir kaynak
+düşerse diğeriyle devam eder (çıkış 0); ikisi de düşerse ya da ikisi de 0 ham sonuç verirse çıkış 1.
+
+`avimsin-pipeline` kuyruktan en çok `DISCOVERY_MAX_COINS_PER_RUN` (3) coin alır (hacmi
+yüksek önce), her biri için scan/filter/score'u ayrı alt süreçte çalıştırır (coin başına
+`PIPELINE_COIN_TIMEOUT_SECONDS`, 3 saat). Durumlar: `done`, `done_warn` (alıcıların >%50'si
+için pencerede transfer yok: eski coin olabilir), `failed`, `timeout`. Takılan ya da
+başarısız coin sıradakini engellemez; `failed`/`timeout` coin kuyrukta yeniden denenmez
+(elle `status='pending'` yapılırsa yeniden işlenir). Tur sonunda tek Telegram özeti gider
+(ayar yoksa stdout). Aynı anda tek pipeline (`<db>.pipeline.lock`). Yeni smart wallet'lar
+`avimsin-watch` tarafından bir sonraki turda kendiliğinden alınır. Zamanlayıcı: `deploy/README.md`.
 
 ## RPC Stratejisi
 

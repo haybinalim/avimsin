@@ -20,7 +20,8 @@ DB="$APP_DIR/data/avimsin.sqlite"
 
 mkdir -p "$OUT_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-cp "$DB" "$OUT_DIR/avimsin-$STAMP.sqlite"
+# DB WAL modunda: düz cp, -wal dosyasındaki son yazmaları kaçırır; .backup tutarlı kopya alır.
+sqlite3 "$DB" ".backup '$OUT_DIR/avimsin-$STAMP.sqlite'"
 echo "yedek: $OUT_DIR/avimsin-$STAMP.sqlite"
 # Son 14 yedeği tut, eskileri sil.
 ls -t "$OUT_DIR"/avimsin-*.sqlite 2>/dev/null | tail -n +15 | xargs -r rm -f
