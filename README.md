@@ -212,14 +212,18 @@ bulur; kural (ortam değişkenleri): yaş `DISCOVERY_MIN_AGE_DAYS`–`DISCOVERY_
 piyasa değeri (yoksa FDV) ≥ `DISCOVERY_MIN_MCAP_USD`, likidite ≥ `DISCOVERY_MIN_LIQUIDITY_USD`,
 24s hacim ≥ `DISCOVERY_MIN_VOLUME_24H_USD`; stable/wSOL (`WATCH_IGNORED_MINTS`) hariç. Uyanlar
 `discovery_queue` tablosuna eklenir (`coins`'te ya da kuyrukta olan coin atlanır). Bir kaynak
-düşerse diğeriyle devam eder (çıkış 0); ikisi de düşerse ya da ikisi de 0 ham sonuç verirse çıkış 1.
+düşerse diğeriyle devam eder (çıkış 0). Not: GeckoTerminal'de `market_cap_usd` çoğu zaman
+boştur ve FDV kullanılır; FDV dolaşımdaki arzı hesaba katmadığı için piyasa değerini
+şişirebilir (mcap eşiğini geçmesi gerçek mcap'i garanti etmez); ikisi de düşerse ya da ikisi de 0 ham sonuç verirse çıkış 1.
 
 `avimsin-pipeline` kuyruktan en çok `DISCOVERY_MAX_COINS_PER_RUN` (3) coin alır (hacmi
 yüksek önce), her biri için scan/filter/score'u ayrı alt süreçte çalıştırır (coin başına
 `PIPELINE_COIN_TIMEOUT_SECONDS`, 3 saat). Durumlar: `done`, `done_warn` (alıcıların >%50'si
 için pencerede transfer yok: eski coin olabilir), `failed`, `timeout`. Takılan ya da
 başarısız coin sıradakini engellemez; `failed`/`timeout` coin kuyrukta yeniden denenmez
-(elle `status='pending'` yapılırsa yeniden işlenir). Tur sonunda tek Telegram özeti gider
+(elle yeniden kuyruğa almak için:
+`sqlite3 data/avimsin.sqlite "UPDATE discovery_queue SET status='pending' WHERE coin='<mint>'"`
+ya da Python ile aynı UPDATE). Tur sonunda tek Telegram özeti gider
 (ayar yoksa stdout). Aynı anda tek pipeline (`<db>.pipeline.lock`). Yeni smart wallet'lar
 `avimsin-watch` tarafından bir sonraki turda kendiliğinden alınır. Zamanlayıcı: `deploy/README.md`.
 

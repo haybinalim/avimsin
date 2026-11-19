@@ -79,7 +79,7 @@ journalctl -u avimsin-watch -e --no-pager | tail -50
 
 ## Bilinen sınırlar
 
-- SQLite tek dosya, WAL modunda: `backup.sh` `sqlite3 .backup` ile tutarlı kopya alır
+- SQLite tek dosya, WAL modunda: `backup.sh` venv'deki `avimsin-backup` (Python `Connection.backup`; sunucuda `sqlite3` komutu gerekmez) ile tutarlı kopya alır
   (düz `cp` WAL'daki son yazmaları kaçırır; elle yedeklerken `-wal`/`-shm` dosyalarını da
   unutmayın).
 - Public RPC rate limit kovası paylaşımlı: VPS'te tek servis koşar; geliştirici

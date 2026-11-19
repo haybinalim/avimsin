@@ -33,6 +33,11 @@ from .storage.db import (
 from .window import resolve_window
 
 
+# Alıcıların çoğu için pencerede işlem yoksa basılan uyarının başı; avimsin-pipeline çıktıyı
+# bu şablondan türettiği regex ile okur (done_warn) — metni burada değiştirmek yeterli.
+SILENT_WARNING_HEAD = "UYARI: {silent}/{total} alıcının ATA'sında pencerede hiç işlem yok"
+
+
 def _is_contract(client: ChainClient, wallet: str) -> bool:
     """Cüzdanın kontrat/program olup olmadığını söyler."""
     return client.is_contract(wallet)
@@ -135,7 +140,7 @@ def main() -> None:
             silent = sum(1 for w in wallets if signature_counts.get(w, 0) == 0)
             if silent * 2 > len(wallets):
                 print(
-                    f"UYARI: {silent}/{len(wallets)} alıcının ATA'sında pencerede hiç işlem yok; "
+                    SILENT_WARNING_HEAD.format(silent=silent, total=len(wallets)) + "; "
                     "ATA türetimi ya da pencere hatalı olabilir, sonuçlara güvenmeyin."
                 )
 

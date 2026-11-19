@@ -21,6 +21,7 @@ avimsin-score = "avimsin.score:main"
 avimsin-watch = "avimsin.watch:main"
 avimsin-discover = "avimsin.discover:main"
 avimsin-pipeline = "avimsin.pipeline:main"
+avimsin-backup = "avimsin.backup:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

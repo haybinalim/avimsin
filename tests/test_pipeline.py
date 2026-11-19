@@ -9,6 +9,7 @@ from __future__ import annotations
 import dataclasses
 import fcntl
 import json
+import os
 import pathlib
 import sqlite3
 import sys
@@ -19,18 +20,19 @@ import pytest
 
 from avimsin import pipeline
 from avimsin.alerts.watcher import smart_wallets_for_chain
+from avimsin.filter import SILENT_WARNING_HEAD
 from avimsin.pipeline import (
     build_summary,
     pick_queue,
     process_coin,
     run_pipeline,
 )
-from avimsin.storage.db import connect, save_coin, save_purchase, save_verdict
+from avimsin.storage.db import connect, save_coin, save_purchase, save_verdict, save_window
 
 A = "A" * 44
 B = "B" * 44
 C = "C" * 44
-WARN_LINE = "UYARI: 8/10 alıcının ATA'sında pencerede hiç işlem yok; sonuçlara güvenmeyin."
+WARN_LINE = SILENT_WARNING_HEAD.format(silent=8, total=10) + "; sonuçlara güvenmeyin."
 
 # score adımı: coin'i + 2 temiz cüzdanı DB'ye yazar (gerçek score'un yan etkisi taklidi).
 WRITE_OK = (
@@ -123,6 +125,74 @@ def test_timeout_kills_process_and_moves_on(db, captured_summary):
     assert status_of(conn, B)[0] == "done"
 
 
+GRANDCHILD = (
+    "import subprocess, sys, time;"
+    "p = subprocess.Popen(['sleep', '300']);"
+    "open(sys.argv[2] + '.pid', 'w').write(str(p.pid));"
+    "time.sleep(60)"
+)
+
+
+def _alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def test_timeout_kills_grandchild_process_group(db):
+    """Süre aşımında yalnız alt süreç değil, onun başlattığı torun da (süreç grubu) ölmeli."""
+    pid = None
+    try:
+        out = process_coin(A, db, 2, build=make_builder({(A, "scan"): GRANDCHILD}))
+        assert out.status == "timeout"
+        pid = int(pathlib.Path(db + ".pid").read_text())
+        deadline = time.monotonic() + 5
+        while _alive(pid) and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert not _alive(pid), "torun süreç timeout sonrası hâlâ yaşıyor"
+    finally:
+        if pid is not None and _alive(pid):
+            os.kill(pid, 9)
+
+
+def test_filter_real_warning_line_is_recognised_by_pipeline(tmp_path, monkeypatch, capsys):
+    """Gerçek filter.main'in bastığı UYARI satırı pipeline regex'inde eşleşmeli (metin kayması yok)."""
+    import sys as _sys
+    from contextlib import nullcontext
+
+    from avimsin import filter as filter_cli
+    from avimsin.collectors.transfers import WalletTransfers
+
+    path = tmp_path / "f.sqlite"
+    coin = "Q" * 44
+    wallets = [chr(ord("a") + i) * 44 for i in range(4)]
+    conn = connect(path)
+    with conn:
+        save_coin(conn, coin, 1, chain="solana")
+        save_window(conn, coin, 1, 1000, True)
+        for w in wallets:
+            save_purchase(conn, coin, w, 1, "tx" + w[:3])
+    conn.close()
+
+    class Client:
+        def block_number(self):
+            return 1000
+
+        def is_contract(self, wallet):
+            return False
+
+        def wallet_transfers(self, *args):
+            return WalletTransfers(events=[], capped=set(), signature_counts={}, limit=100)
+
+    monkeypatch.setattr(filter_cli, "open_chain", lambda chain: nullcontext(Client()))
+    monkeypatch.setattr(_sys, "argv", ["filter", coin, "--db", str(path), "--chain", "solana"])
+    filter_cli.main()
+    out = capsys.readouterr().out.splitlines()
+    assert pipeline.filter_warning_ratio(out) == (4, 4)
+
+
 def test_failed_step_stops_following_steps(db):
     marker = "import pathlib, sys; pathlib.Path(sys.argv[2] + '.ran').write_text('x')"
     build = make_builder({(A, "scan"): "import sys; sys.exit(1)", (A, "filter"): marker})
@@ -142,7 +212,7 @@ def test_done_warn_when_most_buyers_silent(db):
 
 
 def test_no_warn_when_half_or_less_silent(db):
-    line = "UYARI: 5/10 alıcının ATA'sında pencerede hiç işlem yok; x"
+    line = SILENT_WARNING_HEAD.format(silent=5, total=10) + "; x"
     out = process_coin(A, db, 30, build=make_builder({(A, "filter"): f"print({line!r})"}))
     assert out.status == "done"
 

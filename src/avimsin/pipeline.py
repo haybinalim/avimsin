@@ -29,6 +29,7 @@ from pathlib import Path
 from .alerts.telegram import TelegramClient
 from .alerts.watcher import smart_wallets_for_chain
 from .config import settings
+from .filter import SILENT_WARNING_HEAD
 from .storage.db import connect as db_connect
 
 CHAIN = "solana"
@@ -37,7 +38,11 @@ STATUS_WARN = "done_warn"
 STATUS_FAILED = "failed"
 STATUS_TIMEOUT = "timeout"
 # filter.py: "UYARI: {silent}/{toplam} alıcının ATA'sında pencerede hiç işlem yok; ..."
-SILENT_RE = re.compile(r"UYARI: (\d+)/(\d+) alıcının ATA'sında pencerede hiç işlem yok")
+SILENT_RE = re.compile(
+    re.escape(SILENT_WARNING_HEAD)
+    .replace(re.escape("{silent}"), r"(\d+)")
+    .replace(re.escape("{total}"), r"(\d+)")
+)
 TERMINATE_GRACE_SECONDS = 15
 
 CommandBuilder = Callable[[str, str, str], list[str]]
@@ -230,6 +235,11 @@ def run_pipeline(
     runner: Callable[[list[str], float], StepResult] = run_step,
     telegram: TelegramClient | None = None,
 ) -> list[CoinOutcome]:
+    """Kuyruktan coin alıp işler, özet gönderir.
+
+    UYARI: baştaki ``running`` → ``failed`` temizliği yalnız dosya kilidi (main) altında
+    güvenlidir; kilitsiz ikinci bir pipeline çalışırken çağrılırsa canlı işi ``failed`` yapar.
+    """
     # Önceki çalışma yarıda kaldıysa (çökme, makine kapanması) 'running' kalmıştır.
     with conn:
         conn.execute(
