@@ -25,6 +25,7 @@ from ..config import settings
 from ..collectors.transfers import ZERO_ADDRESS, TransferEvent, WalletTransfers
 from ..storage.tx_cache import TxCache, slim_transaction
 from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu sözleşme
+from .rpc_pool import RpcPool, build_pool, is_quota_body
 from .solana_addr import TOKEN_PROGRAMS, derive_ata, is_on_curve, pubkey_bytes
 
 # Sistem Programı: normal cüzdan (EOA benzeri) bu owner'a sahiptir; farklı
@@ -93,8 +94,12 @@ class SolanaClient:
         rate_limit_wait: float = RATE_LIMIT_WAIT_SECONDS,
         max_retries: int = MAX_RETRIES,
         rpc_retries: int = RPC_RETRIES,
+        pool: RpcPool | None = None,
     ) -> None:
         self.url = url
+        # Havuz verilirse (kotalı/çok sağlayıcılı) `url` kullanılmaz; yoksa eski tek uç yolu.
+        self._pool = pool
+        self._current = None  # son isteğin sağlayıcısı (yalnız havuz modunda)
         if timeout is None:
             timeout = httpx.Timeout(connect=10.0, read=60.0, write=30.0, pool=10.0)
         self._http = httpx.Client(timeout=timeout, transport=transport)
@@ -110,12 +115,34 @@ class SolanaClient:
 
     def _post(self, payload: dict[str, Any]) -> httpx.Response:
         """Normal ve retry isteklerinin tamamına aynı pacing sınırını uygular."""
+        if self._pool is not None:
+            return self._post_pool(payload)
         if self._last_call is not None:
             remaining = self.min_interval - (time.monotonic() - self._last_call)
             if remaining > 0:
                 time.sleep(remaining)
         self._last_call = time.monotonic()
         return self._http.post(self.url, json=payload)
+
+    def _post_pool(self, payload: dict[str, Any]) -> httpx.Response:
+        """Sağlayıcı seçer; kotayı İSTEKTEN ÖNCE ayırır (sayaç hatası isteği durdurur)."""
+        while True:
+            provider, wait = self._pool.acquire(payload["method"], time.monotonic())
+            if provider is not None:
+                break
+            time.sleep(wait)
+        self._current = provider
+        return self._http.post(provider.url, json=payload)
+
+    def _pool_rate_limited(self, response: httpx.Response) -> bool:
+        """Havuz modunda 429'u işler; True ise kota bitti (sayaca bakılmaksızın bütçe harcanmaz)."""
+        provider = self._current
+        if provider is not None and provider.quota is not None and is_quota_body(response.text):
+            self._pool.exhaust(provider)
+            return True
+        if provider is not None:
+            self._pool.backoff(provider, time.monotonic() + self.rate_limit_wait)
+        return False
 
     def call(self, method: str, params: list[Any]) -> Any:
         """429 ile transport/5xx hatalarını sınırlı bütçelerle yeniden dener."""
@@ -132,6 +159,13 @@ class SolanaClient:
                 if failures >= self.max_retries:
                     raise RuntimeError(f"{method}: RPC'ye ulaşılamadı") from None
             else:
+                if response.status_code == 429 and self._pool is not None:
+                    if self._pool_rate_limited(response):
+                        continue  # sıradaki sağlayıcı; tükenenler atlanır, hepsi bitince hata
+                    if rate_retries >= self.rate_limit_retries:
+                        raise RuntimeError(f"{method}: 429 yeniden deneme bütçesi tükendi")
+                    rate_retries += 1
+                    continue  # bekleme havuzda: başka sağlayıcı varsa hemen o denenir
                 if response.status_code == 429:
                     if rate_retries >= self.rate_limit_retries:
                         raise RuntimeError(f"{method}: 429 yeniden deneme bütçesi tükendi")
@@ -143,7 +177,11 @@ class SolanaClient:
                     if failures >= self.max_retries:
                         raise RuntimeError(f"{method}: HTTP {response.status_code} yeniden deneme bütçesi tükendi")
                 else:
-                    response.raise_for_status()
+                    try:
+                        response.raise_for_status()
+                    except httpx.HTTPStatusError:
+                        # httpx mesajı URL (anahtar) içerir; yalnız durum kodu raporlanır.
+                        raise RuntimeError(f"{method}: HTTP {response.status_code}") from None
                     data = response.json()
                     if "error" in data:
                         error = RpcError(method, data["error"])
@@ -638,6 +676,14 @@ def resolve_rpc() -> str:
 
 def connect() -> SolanaAdapter:
     """Solana istemcisi açar, ucu bir getSlot ile yoklar, adaptör döndürür."""
-    adapter = SolanaAdapter(SolanaClient(resolve_rpc()))
+    pool = build_pool(settings)
+    if pool is None:
+        client = SolanaClient(DEVNET_RPC)
+    elif len(pool.providers) == 1 and pool.providers[0].quota is None:
+        # Tek kotasız (public) uç: eski davranış (sayaç/DB yok).
+        client = SolanaClient(pool.providers[0].url)
+    else:
+        client = SolanaClient("", pool=pool)
+    adapter = SolanaAdapter(client)
     adapter.block_number()  # canary: ölü uçta ilk kullanımda değil burada patla
     return adapter

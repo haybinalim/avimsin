@@ -10,15 +10,19 @@ adaptörlerin uç seçimini değiştirmez; otomatik seçim veya failover yapmaz.
 
 Kullanım::
 
-    uv run avimsin-rpc
+    uv run avimsin-rpc            # uçları ölçer
+    uv run avimsin-rpc --usage    # Solana sağlayıcı kota kullanımını gösterir (ağ yok)
 """
 
 from __future__ import annotations
 
+import sys
 import time
+from datetime import datetime, timezone
 
 import httpx
 
+from .chains import rpc_pool
 from .config import settings
 
 
@@ -63,17 +67,25 @@ def _hex_to_int(value: object, method: str) -> int:
     raise RpcCheckError(f"{method}: geçersiz sayısal sonuç")
 
 
-def check_endpoint(client: httpx.Client, name: str, url: str) -> dict:
-    """Ağ kimliği, blok/slot ve iki sıralı çağrının toplam gecikmesini ölçer."""
+def check_endpoint(client: httpx.Client, name: str, url: str, gate=None) -> dict:
+    """Ağ kimliği, blok/slot ve iki sıralı çağrının toplam gecikmesini ölçer.
+
+    ``gate(method)`` verilirse her çağrıdan ÖNCE kota ayırır; ayıramazsa
+    RpcCheckError verir ve istek gitmez.
+    """
     protocol = "solana" if name.startswith("solana") else "evm"
     result = {"name": name, "protocol": protocol, "network_id": None, "ok": False}
     start = time.perf_counter()
     try:
         if protocol == "solana":
+            if gate:
+                gate("getGenesisHash")
             network = _rpc_call(client, url, "getGenesisHash")
             if not isinstance(network, str) or not network.strip():
                 raise RpcCheckError("getGenesisHash: geçersiz ağ kimliği")
             result["network_id"] = network
+            if gate:
+                gate("getSlot")
             height = _rpc_call(client, url, "getSlot")
             if type(height) is not int or height < 0:
                 raise RpcCheckError("getSlot: geçersiz slot")
@@ -124,8 +136,63 @@ def _print_results(results: list[dict]) -> None:
         print("Hiçbir uç yanıt vermedi.")
 
 
+def _solana_providers() -> list:
+    return rpc_pool.build_providers(
+        settings.rpc_endpoints,
+        getattr(settings, "rpc_options", {}),
+        getattr(settings, "solana_min_interval_seconds", 0.9),
+    )
+
+
+def _gate_for(provider, store):
+    """Kotalı sağlayıcıda ölçüm çağrıları da sayaca yazılır (aksi halde kota sızar)."""
+    if provider.quota is None:
+        return None
+
+    def gate(method: str) -> None:
+        try:
+            ok = store.reserve(provider, provider.cost(method))[0]
+        except rpc_pool.RpcUsageError:
+            raise RpcCheckError(f"{method}: kota sayacı yazılamadı; istek gönderilmedi") from None
+        if not ok:
+            raise RpcCheckError(f"{method}: kota sınırı (%{rpc_pool.HARD_LIMIT_PERCENT}) doldu; istek gönderilmedi")
+
+    return gate
+
+
+def print_usage() -> int:
+    """Her Solana sağlayıcısı için kullanım/kota/dönem özeti (URL basılmaz)."""
+    try:
+        providers = _solana_providers()
+    except ValueError as exc:
+        print(f"HATA: {exc}")
+        return 1
+    if not providers:
+        print("Tanımlı Solana RPC sağlayıcısı yok.")
+        return 1
+    store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", "data/rpc_usage.sqlite"))
+    print(f"{'AD':<24}{'PROFİL':<12}{'KULLANIM/KOTA':<26}{'YÜZDE':<8}{'DÖNEM BİTİŞİ':<18}TÜKENMİŞ")
+    print("-" * 96)
+    for p in providers:
+        if p.quota is None:
+            print(f"{p.name:<24}{p.profile:<12}{'kotasız':<26}{'-':<8}{'-':<18}hayır")
+            continue
+        try:
+            used, end = store.read(p)
+        except rpc_pool.RpcUsageError:
+            print(f"{p.name:<24}{p.profile:<12}sayaç okunamadı")
+            continue
+        percent = f"%{used * 100 / p.quota:.1f}"
+        end_text = datetime.fromtimestamp(end, timezone.utc).strftime("%Y-%m-%d %H:%M") if end else "-"
+        exhausted = "evet" if used >= p.limit else "hayır"
+        print(f"{p.name:<24}{p.profile:<12}{f'{used}/{p.quota}':<26}{percent:<8}{end_text:<18}{exhausted}")
+    return 0
+
+
 def main() -> None:
-    """CLI giriş noktası: tüm RPC uçlarını ölçer ve tablo basar."""
+    """CLI giriş noktası: tüm RPC uçlarını ölçer ve tablo basar (`--usage`: kota özeti)."""
+    if "--usage" in sys.argv[1:]:
+        raise SystemExit(print_usage())
     endpoints = settings.rpc_endpoints
     if not endpoints:
         print("`.env` dosyasında `RPC_<AD>=<json-rpc-url>` tanımlı bir uç yok.")
@@ -133,10 +200,20 @@ def main() -> None:
         raise SystemExit(1)
 
     results: list[dict] = []
+    gates: dict = {}
+    if any(n.startswith("solana") for n in endpoints):
+        try:
+            providers = _solana_providers()
+            if any(p.quota is not None for p in providers):
+                store = rpc_pool.UsageStore(getattr(settings, "rpc_usage_db", "data/rpc_usage.sqlite"))
+                gates = {p.name: _gate_for(p, store) for p in providers}
+        except (ValueError, rpc_pool.RpcUsageError):
+            print("HATA: RPC havuz ayarı/kota sayacı kurulamadı; Solana uçları ölçülmedi")
+            endpoints = {n: u for n, u in endpoints.items() if not n.startswith("solana")}
     with httpx.Client() as client:
         for name, url in endpoints.items():
             try:
-                results.append(check_endpoint(client, name, url))
+                results.append(check_endpoint(client, name, url, gates.get(name)))
             except Exception:  # noqa: BLE001 — sonraki uç ölçülür; ham hata gizli kalır
                 results.append({
                     "name": name,
