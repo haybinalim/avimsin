@@ -207,6 +207,13 @@ class SolanaClient:
                 return out
             before = batch[-1]["signature"]
 
+    def signatures_since(self, address: str, until: str | None, limit: int) -> list[dict]:
+        """Adresin ``until`` imzasından YENİ en çok ``limit`` imzası (yeniden eskiye); tek çağrı."""
+        params: dict[str, Any] = {"limit": limit}
+        if until:
+            params["until"] = until
+        return self.call("getSignaturesForAddress", [address, params]) or []
+
     def get_transaction(self, signature: str) -> dict | None:
         """İşlemi jsonParsed kodlamasıyla açar (token bakiyeleri owner'lı gelir).
 
@@ -391,6 +398,14 @@ class SolanaAdapter:
             events.extend(self._tx_to_events(tx, token, slot, entry["signature"]))
         events.sort(key=lambda e: (e.block, e.tx))
         return events
+
+    def new_signatures(self, wallet: str, until: str | None, limit: int) -> list[dict]:
+        """Cüzdanın ``until``'den yeni imzaları (en yeni önce, en çok ``limit``)."""
+        return self._client.signatures_since(wallet, until, limit)
+
+    def get_transaction(self, signature: str) -> dict | None:
+        """Tek işlemi açar (önbellek bağlıysa oradan)."""
+        return self._client.get_transaction(signature)
 
     def first_slot(self, token: str) -> int | None:
         """Mint'in en eski işleminin slotu (oluşturma); işlem yoksa None."""

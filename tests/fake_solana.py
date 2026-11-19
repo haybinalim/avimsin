@@ -98,6 +98,11 @@ class FakeSolanaChain:
             out = list(self.address_signatures.get(address, []))
         else:
             out = list(self.signatures)
+        until = opts.get("until")
+        if until is not None:
+            uidx = next((i for i, e in enumerate(out) if e["signature"] == until), None)
+            if uidx is not None:
+                out = out[:uidx]
         before = opts.get("before")
         if before is not None:
             idx = next((i for i, e in enumerate(out) if e["signature"] == before), None)

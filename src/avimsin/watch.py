@@ -12,7 +12,7 @@ import sys
 
 from .alerts.telegram import TelegramClient
 from .alerts.watcher import WatchRpcError, watch_loop
-from .chains import open_chain
+from .chains import attach_tx_cache, open_chain
 from .config import settings
 from .storage.db import connect as db_connect
 
@@ -36,6 +36,7 @@ def main() -> None:
     try:
         telegram = TelegramClient()
         with open_chain(args.chain) as client:
+            attach_tx_cache(client, args.db)  # Solana: getTransaction önbelleği (EVM'de no-op)
             if args.once:
                 sent = watch_loop(
                     client, conn, client, once=True, telegram=telegram, chain=args.chain

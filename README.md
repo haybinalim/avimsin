@@ -97,6 +97,27 @@ kaydı günceller (`Pencere güncellendi: eski → yeni`); yalnız `--from-block
 başlangıçtan yeniden hesaplanır (eski bitiş korunmaz); `--to-block` en güncel bloktan büyükse hata verilir. Sonuçlar yalnız o pencerenin verisine
 dayanır; eksik pencerede skorlar da eksik veriyle hesaplanmıştır. `avimsin-scan` pencereye dokunmaz.
 
+**Solana izleme (varsayılan: cüzdan bazlı).** Her tur her smart wallet için
+`getSignaturesForAddress(until=<son imza>)` çağrılır; yalnız yeni imzaların işlemleri açılır
+(`sol_tx_cache` kullanılır). Cüzdanın sahibi olduğu token bakiyesi artan (post − pre > 0) HER mint
+giriştir; coins tablosunda olması gerekmez, yani taranmamış yeni coinler de görülür. `meta.err`
+olan işlemler ile wSOL/USDC/USDT (`WATCH_IGNORED_MINTS`) sayılmaz. Cursor cüzdan başınadır
+(`watch_wallet_cursor`); ilk görülen cüzdanda geriye dönük tarama yoktur (cursor en yeni imzaya
+konur). Cüzdan başına tur sınırı `WATCH_MAX_TX_PER_WALLET_POLL` (50): aşılırsa en yeni 50 açılır,
+kalanlar atlanır (log) ve cursor en yeniye geçer. Cüzdan RPC hatasında yalnız o cüzdanın cursor'ı
+ilerlemez. Her tur tek satır özet basar: `tur: N cüzdan, M yeni işlem, K giriş, H hata, süre s`;
+tüm cüzdanlar hata verirse tur RPC hatası sayılır (`--once` çıkış kodu 1). Sinyal mesajı mint
+adresini ve DexScreener bağlantısını içerir. Eski coin bazlı yol için `WATCH_SOLANA_MODE=coin`;
+EVM her zaman coin bazlıdır. Servis `PYTHONUNBUFFERED=1` ile çalışır (journal'da satırlar anında görünür).
+Yeniden denemeden sonra da okunamayan işlem uyarıyla atlanır (cüzdan kilitlenmesin diye; scan yoluyla aynı), sayısı özet satırında `atlanan` olarak görünür. Kayıp riski: atlanan işlemdeki bir giriş sinyale girmez.
+**Yüksek frekans kuralı (cüzdan modu).** Son `WATCH_BOT_WINDOW_SECONDS` (3600) içinde
+`WATCH_BOT_MAX_INFLOWS` (10) sayısından FAZLA farklı giriş kaydı (`watch_inflows`, slot bazlı) olan
+cüzdan sinyal sayımına katılmaz; girişleri yine kaydedilir, yalnız sayımdan süzülür. Kalıcı bot
+işareti yoktur: pencere kayınca cüzdan kendiliğinden döner. Dışlananların sayısı tur özetinde
+(`B bot-dışı`), ilk dışlanmada adresi tek log satırında görünür. Öneri (uygulanmadı): sürekli
+dışlanan cüzdanları `coin_verdicts`'e kalıcı `bot` olarak yazan ayrı bir yol eklenebilir.
+Aşağıdaki açıklama coin bazlı yol (EVM) içindir.
+
 `watch` yalnız seçilen zincirin açıkça etiketli coinlerini izler. Smart wallet: seçili zincirde en az bir coin'de `verdict=ok`
 olan ve o zincirin hiçbir coin'inde `verdict=bot` olmayan cüzdan (dump coin'e özgüdür,
 tek başına dışlamaz; zinciri NULL coinler sayılmaz). Küme boşsa log'a uyarı yazılır
