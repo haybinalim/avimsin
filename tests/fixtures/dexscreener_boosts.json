@@ -1,0 +1,20 @@
+[
+ {
+  "url": "https://dexscreener.com/solana/a4jxnwk1rdrdth6hmdasi45c89n1aguthivaqptvpump",
+  "chainId": "solana",
+  "tokenAddress": "A4jXnWk1rDRDth6HmDASi45c89n1AguTHivAQPTVpump",
+  "totalAmount": 500
+ },
+ {
+  "url": "https://dexscreener.com/solana/8cnvwzjlrpqazvn6lszkzmxjxkmmy2btq4q3nn4fpump",
+  "chainId": "solana",
+  "tokenAddress": "8CnvwZJLRpQazvn6LszkzmXJxkmMY2bTQ4Q3NN4fpump",
+  "totalAmount": 100
+ },
+ {
+  "url": "https://dexscreener.com/solana/ejrz94zr4a2scs8ldvraqih2xuxae2ydrequnkmpump",
+  "chainId": "solana",
+  "tokenAddress": "ejrz94zR4A2ScS8LdvRaQih2xUxaE2ydreqUNKmpump",
+  "totalAmount": 100
+ }
+]

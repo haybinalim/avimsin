@@ -19,6 +19,8 @@ avimsin-scan = "avimsin.scan:main"
 avimsin-filter = "avimsin.filter:main"
 avimsin-score = "avimsin.score:main"
 avimsin-watch = "avimsin.watch:main"
+avimsin-discover = "avimsin.discover:main"
+avimsin-pipeline = "avimsin.pipeline:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

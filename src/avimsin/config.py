@@ -56,6 +56,15 @@ class Settings:
     # earliest_buyers: aynı işlemde aynı göndericiden bu kadar (veya fazla) farklı alıcıya
     # giden transferler içeriden dağıtım sayılır, alıcılar erken alıcı olmaz.
     distribution_min_receivers: int = 3
+    # Otomatik keşif (avimsin-discover): aday coin kuralı.
+    discovery_min_age_days: float = 3
+    discovery_max_age_days: float = 30
+    discovery_min_mcap_usd: float = 1_000_000
+    discovery_min_liquidity_usd: float = 100_000
+    discovery_min_volume_24h_usd: float = 250_000
+    # Otomatik keşif (avimsin-pipeline): tur başına coin sayısı ve coin başına süre sınırı (saniye).
+    discovery_max_coins_per_run: int = 3
+    pipeline_coin_timeout_seconds: int = 10800
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -94,6 +103,19 @@ class Settings:
             distribution_min_receivers=int(os.environ.get("DISTRIBUTION_MIN_RECEIVERS", "3")),
             watch_alert_cooldown_seconds=int(
                 os.environ.get("WATCH_ALERT_COOLDOWN_SECONDS", "86400")
+            ),
+            discovery_min_age_days=float(os.environ.get("DISCOVERY_MIN_AGE_DAYS", "3")),
+            discovery_max_age_days=float(os.environ.get("DISCOVERY_MAX_AGE_DAYS", "30")),
+            discovery_min_mcap_usd=float(os.environ.get("DISCOVERY_MIN_MCAP_USD", "1000000")),
+            discovery_min_liquidity_usd=float(
+                os.environ.get("DISCOVERY_MIN_LIQUIDITY_USD", "100000")
+            ),
+            discovery_min_volume_24h_usd=float(
+                os.environ.get("DISCOVERY_MIN_VOLUME_24H_USD", "250000")
+            ),
+            discovery_max_coins_per_run=int(os.environ.get("DISCOVERY_MAX_COINS_PER_RUN", "3")),
+            pipeline_coin_timeout_seconds=int(
+                os.environ.get("PIPELINE_COIN_TIMEOUT_SECONDS", "10800")
             ),
         )
 

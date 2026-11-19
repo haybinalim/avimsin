@@ -102,6 +102,18 @@ CREATE TABLE IF NOT EXISTS analysis_windows (
     to_block INTEGER NOT NULL,
     complete INTEGER NOT NULL
 );
+-- Otomatik keşif kuyruğu (salt-eklemeli: satır silinmez; coin başına tek kayıt).
+-- discover ekler (status=pending); pipeline status/reason'ı günceller.
+CREATE TABLE IF NOT EXISTS discovery_queue (
+    coin TEXT NOT NULL,
+    chain TEXT NOT NULL,
+    source TEXT NOT NULL,
+    found_at TEXT NOT NULL,
+    status TEXT NOT NULL,
+    reason TEXT,
+    metrics_json TEXT,
+    PRIMARY KEY (coin, chain)
+);
 -- Solana getTransaction önbelleği (salt-eklemeli): yalnız gereken alanlar; sonlanmış işlem değişmez.
 CREATE TABLE IF NOT EXISTS sol_tx_cache (
     signature TEXT PRIMARY KEY,
@@ -134,10 +146,17 @@ def normalize_address(address: str) -> str:
     return address.lower() if address[:2].lower() == "0x" else address
 
 
+BUSY_TIMEOUT_SECONDS = 30
+
+
 def connect(path: str | Path) -> sqlite3.Connection:
     """Veritabanını açar (gerekirse oluşturur), şemayı ve migration'ı uygular."""
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # Servis (watch) ve pipeline aynı dosyaya yazar: WAL okuyucuyu yazardan ayırır,
+    # busy_timeout kilit çakışmasında hemen "database is locked" vermek yerine bekletir.
+    conn = sqlite3.connect(path, timeout=BUSY_TIMEOUT_SECONDS)
+    conn.execute(f"PRAGMA busy_timeout = {BUSY_TIMEOUT_SECONDS * 1000}")
+    conn.execute("PRAGMA journal_mode = WAL")
     conn.executescript(SCHEMA)
     columns = {row[1] for row in conn.execute("PRAGMA table_info(wallets)")}
     if "verdict" not in columns:
