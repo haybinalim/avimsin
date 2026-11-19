@@ -296,7 +296,7 @@ class UsageStore:
 class RpcPool:
     """Sağlayıcı seçimi: sıra, RPS, kota (önce ayır), 429 geri çekilmesi."""
 
-    def __init__(self, providers: list[Provider], store: UsageStore, wall=time.time) -> None:
+    def __init__(self, providers: list[Provider], store: UsageStore | None, wall=time.time) -> None:
         if not providers:
             raise RpcPoolExhausted("Tanımlı Solana RPC sağlayıcısı yok")
         self.providers = providers
@@ -376,4 +376,8 @@ def build_pool(settings_obj) -> RpcPool | None:
     )
     if not providers:
         return None
-    return RpcPool(providers, UsageStore(getattr(settings_obj, "rpc_usage_db", "data/rpc_usage.sqlite")))
+    # Kotasız (public) uçlarda sayaç yok: DB dosyası da açılmaz.
+    store = None
+    if any(p.quota is not None for p in providers):
+        store = UsageStore(getattr(settings_obj, "rpc_usage_db", "data/rpc_usage.sqlite"))
+    return RpcPool(providers, store)
