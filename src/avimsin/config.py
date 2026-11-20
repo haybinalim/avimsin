@@ -6,11 +6,25 @@ Gizli bilgiler (API anahtarları, tokenlar) repoya ASLA yazılmaz.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from dataclasses import dataclass, field
 
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# `RPC_<AD>_<SONEK>` biçimli ek ayarlar uç değildir.
+RPC_OPTION_SUFFIXES = ("_profile", "_quota", "_rps", "_period_days", "_period_start")
+
+
+def default_usage_db() -> str:
+    """Sayaç DB'si proje köküne göre mutlak yol (cwd'den bağımsız; servis ve tarama aynı dosyayı görür).
+
+    Kök bulunamazsa (kurulu paket) cwd'ye düşülür.
+    """
+    root = Path(__file__).resolve().parents[2]
+    base = root if (root / "pyproject.toml").exists() else Path.cwd()
+    return str(base / "data" / "rpc_usage.sqlite")
 
 
 @dataclass(frozen=True)
@@ -18,6 +32,11 @@ class Settings:
     """Uygulama ayarları."""
 
     rpc_endpoints: dict[str, str] = field(default_factory=dict)
+    # RPC havuzu ek ayarları (`RPC_SOLANA_<AD>_PROFILE/_QUOTA/_RPS/_PERIOD_DAYS`,
+    # `RPC_SOLANA_ORDER`); uç sayılmaz. Anahtarlar küçük harf, `rpc_` öneksiz.
+    rpc_options: dict[str, str] = field(default_factory=dict)
+    # Kotalı sağlayıcıların ortak kullanım sayacı (süreçler arası paylaşılır).
+    rpc_usage_db: str = field(default_factory=lambda: default_usage_db())
     smart_wallet_signal_threshold: int = 3
     telegram_bot_token: str = ""
     telegram_chat_id: str = ""
@@ -61,9 +80,16 @@ class Settings:
     def from_env(cls) -> "Settings":
         """Ortam değişkenlerinden (ve `.env` dosyasından) ayarları toplar."""
         rpc: dict[str, str] = {}
+        rpc_options: dict[str, str] = {}
         for key, value in os.environ.items():
             if key.startswith("RPC_") and value.strip():
-                rpc[key.removeprefix("RPC_").lower()] = value.strip()
+                name = key.removeprefix("RPC_").lower()
+                if name == "usage_db":
+                    continue
+                if name == "solana_order" or name.endswith(RPC_OPTION_SUFFIXES):
+                    rpc_options[name] = value.strip()
+                else:
+                    rpc[name] = value.strip()
 
         threshold = int(os.environ.get("SMART_WALLET_SIGNAL_THRESHOLD", "3"))
         max_slots = os.environ.get("WATCH_MAX_SLOTS_PER_POLL", "").strip()
@@ -78,6 +104,8 @@ class Settings:
             watch_bot_max_inflows=int(os.environ.get("WATCH_BOT_MAX_INFLOWS", "10")),
             **extra,
             rpc_endpoints=rpc,
+            rpc_options=rpc_options,
+            rpc_usage_db=os.environ.get("RPC_USAGE_DB", "").strip() or default_usage_db(),
             smart_wallet_signal_threshold=threshold,
             telegram_bot_token=os.environ.get("TELEGRAM_BOT_TOKEN", "").strip(),
             telegram_chat_id=os.environ.get("TELEGRAM_CHAT_ID", "").strip(),

@@ -213,8 +213,8 @@ En hızlı uç ve 2 blok/slot üzerindeki gerilik yalnız **aynı ağ içinde**
 raporlanır; ölçülen gecikme iki çağrının toplamıdır, tek seferlik bir gözlemdir.
 
 Komut yalnız raporlar: **otomatik en-hızlı seçimi veya failover yoktur**.
-`scan/filter/score/watch` adaptörleri, ayar adları alfabetik sıralandığında
-seçilen zincirin `robinhood` veya `solana` önekiyle eşleşen **ilk** ucu kullanır.
+`scan/filter/score/watch` Robinhood adaptörü, ayar adları alfabetik sıralandığında
+`robinhood` önekiyle eşleşen **ilk** ucu kullanır (Solana için aşağıdaki havuza bakın).
 Eşleşme yoksa Robinhood public mainnet, Solana public devnet kullanılır.
 Örneğin `RPC_SOLANA_A_MAINNET`, `RPC_SOLANA_Z_BACKUP`'tan önce seçilir;
 ikinci uç otomatik yedek değildir. `RPC_ALCHEMY` gibi genel adlar kontrol
@@ -223,6 +223,39 @@ kullanmak için doğru ağa ait URL'yi `RPC_ROBINHOOD_ALCHEMY` veya
 `RPC_SOLANA_HELIUS` gibi zincir önekli bir adla tanımlayın; seçimi değiştirmek
 için eşleşen ayarları düzenleyin. Üretimde Solana devnet yerine mainnet
 ucunu açıkça yapılandırın.
+
+### Solana RPC havuzu ve kota sınırı
+
+`RPC_SOLANA_<AD>=url` ile birden çok sağlayıcı tanımlanabilir; istemci hepsini bir havuz
+olarak kullanır (ilk alfabetik uç artık tek seçim değildir). Ek ayarlar:
+
+- `RPC_SOLANA_<AD>_PROFILE=helius|chainstack|drpc|alchemy|public` (verilmezse URL'den tahmin;
+  tahmin edilemezse `public`). `_QUOTA`, `_RPS`, `_PERIOD_DAYS` profili ezer.
+- `RPC_SOLANA_ORDER=ad1,ad2` seçim sırası (varsayılan: helius, chainstack, drpc, alchemy, public).
+- `RPC_USAGE_DB` ortak kullanım sayacı (varsayılan `data/rpc_usage.sqlite`; izleme servisi ve
+  tarama aynı dosyayı paylaşır).
+
+Her kotalı sağlayıcı **kodla zorlanan sert sınırla** ücretsiz limitin en çok %99'unda kesilir.
+Birim istekten ÖNCE atomik ayrılır; sayaç yazılamazsa istek gönderilmez (hata verilir). Dönem
+ilk kullanımdan itibaren 30 gündür (takvim ayı değil; sağlayıcı sıfırlama anı doğrulanamadı).
+429 gövdesinde "max usage"/kota mesajı varsa sağlayıcı dönem sonuna kadar tükenmiş sayılır.
+Tüm kotalılar bitince kotasız `public` uca düşülür (log satırı); o da yoksa net hata verilir.
+Varsayılan maliyetler: helius 1 kredi/istek, chainstack 2 RU, drpc 20 CU (doğrulanamadı,
+varsayım), alchemy 40 CU (getAccountInfo 10, getSlot 20). Ücretli plana geçmeyin: sayaç yalnız
+bizde tutulur, sağlayıcı kalan kotayı API'den vermez. Birden çok kotasız/bilinmeyen uç
+tanımlarsanız hepsi `public` sayılır ve sırayla (kendi 0,9 sn aralığıyla) kullanılır.
+
+Sağlayıcı alan adı tanınmıyorsa (helius, chainstack/p2pify, drpc, alchemy ve resmî Solana
+public uçları dışında) `RPC_SOLANA_<AD>_PROFILE` açıkça verilmelidir; yoksa hata alınır
+(sessizce kotasız sayılmaz). Bilerek kotasız kullanım için `_PROFILE=public` yazın.
+`RPC_SOLANA_<AD>_PERIOD_START=YYYY-MM-DD`: panelden hesabın yenilenme gününü girin; dönem
+bu günden itibaren `_PERIOD_DAYS` katlarına hizalanır (verilmezse ilk kullanımdan itibaren).
+`RPC_USAGE_DB` varsayılanı proje köküne göre mutlak yoldur (`<kök>/data/rpc_usage.sqlite`).
+Sayaç DB'si yeni oluşursa "sayaç sıfırdan başladı" uyarısı basılır: dosyayı yedeğe alın
+(`deploy/backup.sh` ile birlikte) ve silmeyin; kaybolursa sağlayıcı panelinden kullanımı kontrol edin.
+
+Kullanımı görmek için (ağ isteği yok; URL basılmaz): `uv run avimsin-rpc --usage`.
+%80 ve %95'te log uyarısı basılır. `avimsin-rpc` ölçüm çağrıları da sayaca yazılır.
 
 Solana istemcisi normal çağrılar ve tüm retry isteklerinde aynı asgari aralığı
 uygular. 429 için 8 ek deneme; transport/502/503/504 için toplam 3 hata bütçesi
