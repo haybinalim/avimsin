@@ -91,6 +91,12 @@ class Settings:
         rpc: dict[str, str] = {}
         rpc_options: dict[str, str] = {}
         for key, value in os.environ.items():
+            if key.startswith("RPC_") and not key.isascii():
+                # Türk klavyesi (İ, ı) sessizce yanlış ada dönüşür; değer/URL basılmaz.
+                raise ValueError(
+                    f"Ortam değişkeni adı ASCII dışı karakter içeriyor: {key!r}. "
+                    "Ad yalnız A-Z, 0-9 ve _ içermeli: İ yerine I, ı yerine i yazın."
+                )
             if key.startswith("RPC_") and value.strip():
                 name = key.removeprefix("RPC_").lower()
                 if name == "usage_db":

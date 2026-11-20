@@ -25,7 +25,7 @@ from ..config import settings
 from ..collectors.transfers import ZERO_ADDRESS, TransferEvent, WalletTransfers
 from ..storage.tx_cache import TxCache, slim_transaction
 from .protocol import ChainClient  # noqa: F401 — adaptörün doldurduğu sözleşme
-from .rpc_pool import RpcPool, build_pool, is_quota_body
+from .rpc_pool import RpcPool, build_pool, is_plan_rejection, is_quota_body
 from .solana_addr import TOKEN_PROGRAMS, derive_ata, is_on_curve, pubkey_bytes
 
 # Sistem Programı: normal cüzdan (EOA benzeri) bu owner'a sahiptir; farklı
@@ -166,6 +166,16 @@ class SolanaClient:
                         raise RuntimeError(f"{method}: 429 yeniden deneme bütçesi tükendi")
                     rate_retries += 1
                     continue  # bekleme havuzda: başka sağlayıcı varsa hemen o denenir
+                if (
+                    self._pool is not None
+                    and self._current is not None
+                    and response.status_code != 429
+                    and is_plan_rejection(response.status_code, response.text)
+                ):
+                    # Plan bu yöntemi reddetti: bu yöntem için atla, sıradaki sağlayıcıya geç.
+                    # Hepsi reddederse acquire() net RpcPoolExhausted verir (sessiz başarı yok).
+                    self._pool.reject_method(self._current, method)
+                    continue
                 if response.status_code == 429:
                     if rate_retries >= self.rate_limit_retries:
                         raise RuntimeError(f"{method}: 429 yeniden deneme bütçesi tükendi")
