@@ -279,6 +279,19 @@ bu günden itibaren `_PERIOD_DAYS` katlarına hizalanır (verilmezse ilk kullan�
 Sayaç DB'si yeni oluşursa "sayaç sıfırdan başladı" uyarısı basılır: dosyayı yedeğe alın
 (`deploy/backup.sh` ile birlikte) ve silmeyin; kaybolursa sağlayıcı panelinden kullanımı kontrol edin.
 
+**Plan reddi:** bir sağlayıcı yöntemi "planında yok" diye reddederse (mesajda "not available on
+your current plan" ya da HTTP 403 + JSON-RPC `-32002`) istek hata vermeden sıradaki sağlayıcıya
+gider; o sağlayıcı o YÖNTEM için süreç ömrü boyunca atlanır (diğer yöntemler etkilenmez) ve bir
+kez log basılır. Reddedilen istek için ayrılan kota birimi iade edilmez (sayaç güvenli tarafta
+kalır; yöntem başına en çok 1 birim). Hiçbir sağlayıcı yöntemi desteklemiyorsa net hata verilir
+(sessiz "0 sonuç" yok). Düz 403 (yanlış anahtar vb.) bu kapsamda değildir, hata olarak kalır.
+Chainstack ücretsiz planı `getSignaturesForAddress`'i böyle reddeder (Archive/Debug/Trace);
+Chainstack'i yine de tanımlayabilirsiniz, bu çağrı helius/alchemy/public'e gider.
+
+`RPC_` ile başlayan ortam değişkeni adında ASCII dışı karakter (Türk klavyesiyle `İ`, `ı`)
+varsa ayarlar yüklenirken hata verilir (değer basılmaz): `İ` yerine `I`, `ı` yerine `i` yazın
+(ör. `RPC_SOLANA_CHAINSTACK`). systemd bu satırı atlar, python-dotenv okur; sessiz kabul yoktur.
+
 Kullanımı görmek için (ağ isteği yok; URL basılmaz): `uv run avimsin-rpc --usage`.
 %80 ve %95'te log uyarısı basılır. `avimsin-rpc` ölçüm çağrıları da sayaca yazılır.
 

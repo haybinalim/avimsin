@@ -425,3 +425,80 @@ def test_default_usage_db_is_absolute():
     from pathlib import Path
     from avimsin.config import default_usage_db
     assert Path(default_usage_db()).is_absolute()
+
+
+# ---- plan reddi: yöntem başına atlama ----
+CHAIN = "https://x.p2pify.com/KEYCHAIN999/"
+PLAN_BODY = {"error": {"code": -32002, "message": "Archive, Debug and Trace requests are not "
+                       "available on your current plan. Upgrade."}}
+
+
+def plan_handler(request):
+    body = json.loads(request.content)
+    if request.url.host.endswith("p2pify.com") and body["method"] == "getSignaturesForAddress":
+        return httpx.Response(403, json=PLAN_BODY)
+    return httpx.Response(200, json={"result": [] if body["method"] == "getSignaturesForAddress" else 9})
+
+
+def test_plan_rejection_403_falls_to_next_provider_per_method(tmp_path, clock, capsys):
+    client, pool, store, seen = make(
+        tmp_path, {"solana_chainstack": CHAIN, "solana_p": PUBLIC},
+        handler=plan_handler)
+    assert client.call("getSignaturesForAddress", ["a", {}]) == []
+    assert [h for h, _ in seen] == ["x.p2pify.com", "api.mainnet-beta.solana.com"]
+    client.call("getSignaturesForAddress", ["a", {}])  # artık chainstack denenmez
+    assert [h for h, _ in seen].count("x.p2pify.com") == 1
+    clock[0] += 10  # chainstack RPS aralığı geçsin
+    assert client.get_slot() == 9  # başka yöntem hâlâ chainstack'te
+    assert seen[-1][0] == "x.p2pify.com"
+    err = capsys.readouterr().err
+    assert err.count("getSignaturesForAddress yöntemini planında") == 1  # tek log
+    assert "KEYCHAIN999" not in err
+
+
+def test_plan_rejection_by_message_on_200_also_skips(tmp_path, clock):
+    def handler(request):
+        if request.url.host.endswith("p2pify.com"):
+            return httpx.Response(200, json={"error": {"code": -32600,
+                                  "message": "method not available on your current plan"}})
+        return httpx.Response(200, json={"result": 3})
+    client, pool, store, seen = make(
+        tmp_path, {"solana_chainstack": CHAIN, "solana_p": PUBLIC}, handler=handler)
+    assert client.get_slot() == 3
+
+
+def test_all_providers_reject_plan_raises_clear_error_no_url(tmp_path, clock):
+    def handler(request):
+        return httpx.Response(403, json=PLAN_BODY)
+    client, pool, store, seen = make(tmp_path, {"solana_chainstack": CHAIN}, handler=handler)
+    with pytest.raises(RpcPoolExhausted) as e:
+        client.call("getSignaturesForAddress", ["a", {}])
+    assert "KEYCHAIN999" not in str(e.value) and "desteklemiyor" in str(e.value)
+    assert len(seen) == 1
+
+
+def test_plain_403_is_not_plan_rejection(tmp_path, clock):
+    client, pool, store, seen = make(
+        tmp_path, {"solana_chainstack": CHAIN, "solana_p": PUBLIC},
+        handler=lambda r: httpx.Response(403, text="forbidden"))
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        client.get_slot()
+    assert len(seen) == 1  # sağlayıcı atlanmadı, hata gizlenmedi
+
+
+def test_single_url_path_403_unchanged():
+    client = solana.SolanaClient(
+        "https://x.example/", transport=httpx.MockTransport(lambda r: httpx.Response(403, json=PLAN_BODY)),
+        min_interval=0)
+    with pytest.raises(RuntimeError, match="HTTP 403"):
+        client.call("getSignaturesForAddress", ["a", {}])
+
+
+# ---- ASCII dışı RPC_ adı ----
+def test_non_ascii_rpc_env_name_is_clear_error_without_value(monkeypatch):
+    monkeypatch.setenv("RPC_SOLANA_CHAİNSTACK", SECRET)
+    with pytest.raises(ValueError) as e:
+        Settings.from_env()
+    msg = str(e.value)
+    assert "CHAİNSTACK" in msg and "İ yerine I" in msg
+    assert "TOPSECRET" not in msg

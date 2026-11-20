@@ -13,6 +13,7 @@ sağlayıcı kimliği URL'den türetilen kararlı bir hash'tir, ekranda `.env` a
 from __future__ import annotations
 
 import hashlib
+import json
 import sqlite3
 import sys
 import time
@@ -30,6 +31,11 @@ DB_RETRY_WAIT = 0.2
 
 # 429 gövdesinde bunlardan biri varsa sağlayıcı dönem sonuna kadar tükenmiş sayılır.
 QUOTA_MARKERS = ("max usage", "monthly limit", "monthly capacity limit", "quota exceeded", "exceeded your")
+
+# Sağlayıcı yöntemi "planında yok" diye reddederse (ör. Chainstack ücretsiz planı
+# getSignaturesForAddress): kalıp DAR tutulur; düz 403 (yanlış anahtar vb.) buna girmez.
+PLAN_MARKER = "not available on your current plan"
+PLAN_REJECT_CODE = -32002
 
 DEFAULT_USAGE_DB = "data/rpc_usage.sqlite"
 PROFILE_ORDER = ("helius", "chainstack", "drpc", "alchemy", "public")
@@ -347,6 +353,7 @@ class RpcPool:
         self.store = store
         self._wall = wall
         self._fallback_logged = False
+        self._unsupported: set[tuple[str, str]] = set()  # (sağlayıcı adı, yöntem); süreç ömrü
 
     def acquire(self, method: str, now: float) -> tuple[Provider | None, float]:
         """(sağlayıcı, 0) ya da (None, bekleme_sn). Kota ayrılmış halde döner.
@@ -355,7 +362,11 @@ class RpcPool:
         """
         wait: float | None = None
         quota_skipped = False
+        plan_skipped = False
         for p in self.providers:
+            if (p.name, method) in self._unsupported:
+                plan_skipped = True
+                continue
             if p.cooldown_until > now:
                 wait = _min(wait, p.cooldown_until - now)
                 continue
@@ -379,6 +390,8 @@ class RpcPool:
                 _log(f"kotalı sağlayıcılar tükendi; {p.name} ({p.profile}) ucuna düşüldü")
             p.last_call = now
             return p, 0.0
+        if wait is None and plan_skipped and not quota_skipped:
+            raise RpcPoolExhausted(f"{method}: hiçbir RPC sağlayıcısının planı bu yöntemi desteklemiyor")
         if wait is None:
             raise RpcPoolExhausted(
                 "Tüm RPC sağlayıcılarının kotası tükendi (kotasız public uç tanımlı değil)"
@@ -393,6 +406,18 @@ class RpcPool:
 
     def backoff(self, p: Provider, until: float) -> None:
         p.cooldown_until = max(p.cooldown_until, until)
+
+    def reject_method(self, p: Provider, method: str) -> None:
+        """Sağlayıcı yöntemi planında yok dedi: yalnız bu yöntem için süreç boyunca atlanır.
+
+        Ayrılan kota birimi İADE EDİLMEZ (sağlayıcı faturalandırmayabilir; sayaç güvenli
+        tarafta kalır). Yöntem başına tek birim kaybolur: sonraki çağrılar atlar.
+        """
+        key = (p.name, method)
+        if key in self._unsupported:
+            return
+        self._unsupported.add(key)
+        _log(f"{p.name} ({p.profile}) {method} yöntemini planında desteklemiyor; bu yöntem için atlanır")
 
     def exhaust(self, p: Provider) -> None:
         """429 gövdesi kota bitti diyor: dönem sonuna kadar kullanılmaz."""
@@ -409,6 +434,19 @@ def _min(current: float | None, value: float) -> float:
 def is_quota_body(text: str) -> bool:
     lowered = text.lower()
     return any(marker in lowered for marker in QUOTA_MARKERS)
+
+
+def is_plan_rejection(status: int, text: str) -> bool:
+    """Yanıt "bu yöntem planınızda yok" mu? Mesaj kalıbı ya da 403 + JSON-RPC -32002."""
+    if PLAN_MARKER in text.lower():
+        return True
+    if status != 403:
+        return False
+    try:
+        error = json.loads(text).get("error")
+    except (ValueError, AttributeError):
+        return False
+    return isinstance(error, dict) and error.get("code") == PLAN_REJECT_CODE
 
 
 def build_pool(settings_obj) -> RpcPool | None:
