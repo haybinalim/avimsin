@@ -1,0 +1,21 @@
+[Unit]
+Description=Avimsin gunluk otomatik kesif + analiz (discover -> pipeline)
+Documentation=https://github.com/haybinalim/avimsin
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# APP_DIR kurulumda gerçek yola çevrilir.
+WorkingDirectory=APP_DIR
+EnvironmentFile=-APP_DIR/.env
+Environment=PYTHONUNBUFFERED=1
+# Önce keşif: "-" öneki keşif hatasını (iki kaynak da düştü, çıkış 1) yoksayar ki kuyruktaki
+# bekleyen coin'ler yine de işlensin; hata journal'da kalır.
+ExecStart=-APP_DIR/.venv/bin/avimsin-discover --db APP_DIR/data/avimsin.sqlite
+# Sonra analiz: tüm coin'ler başarısızsa çıkış 1 (unit "failed" görünür).
+ExecStart=APP_DIR/.venv/bin/avimsin-pipeline --db APP_DIR/data/avimsin.sqlite
+# Coin başına 3 saat x en çok 3 coin; pipeline kendi sınırını uygular, bu yalnız üst sınırdır.
+TimeoutStartSec=12h
+NoNewPrivileges=true
+PrivateTmp=true

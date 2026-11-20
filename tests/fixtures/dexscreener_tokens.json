@@ -1,0 +1,117 @@
+[
+ {
+  "chainId": "solana",
+  "dexId": "pumpswap",
+  "url": "https://dexscreener.com/solana/c3ai5bk7q9jttvcbwqeexsta99bmmlcnvyasdd7mnqbt",
+  "pairAddress": "C3ai5bk7q9jTtVcbWQeEXSta99BMmLCNVyasDD7mnQBt",
+  "baseToken": {
+   "address": "A4jXnWk1rDRDth6HmDASi45c89n1AguTHivAQPTVpump",
+   "name": "GTA Season",
+   "symbol": "GTASZN"
+  },
+  "quoteToken": {
+   "address": "So11111111111111111111111111111111111111112",
+   "name": "Wrapped SOL",
+   "symbol": "SOL"
+  },
+  "priceNative": "0.00001092",
+  "priceUsd": "0.0008208",
+  "txns": {
+   "m5": {
+    "buys": 336,
+    "sells": 156
+   },
+   "h1": {
+    "buys": 5520,
+    "sells": 2583
+   },
+   "h6": {
+    "buys": 34705,
+    "sells": 19864
+   },
+   "h24": {
+    "buys": 98294,
+    "sells": 55017
+   }
+  },
+  "volume": {
+   "h24": 5544328.39,
+   "h6": 1398791.55,
+   "h1": 63066.63,
+   "m5": 4765.31
+  },
+  "priceChange": {
+   "m5": -12.76,
+   "h1": 24.39,
+   "h6": -22.22,
+   "h24": 707
+  },
+  "liquidity": {
+   "base": 45177683,
+   "quote": 480.7405,
+   "usd": 73202.46
+  },
+  "fdv": 817906,
+  "marketCap": 817906,
+  "pairCreatedAt": 1795045398000,
+  "boosts": {
+   "active": 500
+  }
+ },
+ {
+  "chainId": "solana",
+  "dexId": "pumpswap",
+  "url": "https://dexscreener.com/solana/dchxq4qfppnpedfzlniwvphrvuufgfqedlaazbizhuwf",
+  "pairAddress": "DChXQ4qFPpNPEDfZLNiwvPhrVuuFGfqEDLAAZbiZHUWf",
+  "baseToken": {
+   "address": "9hjBLBrc7WZW2H8UQvBAvG5WiTZotXUv2Bdcn4f4pump",
+   "name": "DacityCoin",
+   "symbol": "DCTY"
+  },
+  "quoteToken": {
+   "address": "TTWofwAge91oFhZs7kpQdyrVRkmevgM88xijGvQFbKo",
+   "name": "Take-Two Interactive Software - Backpack Securities",
+   "symbol": "TTWO"
+  },
+  "priceNative": "0.00008902",
+  "priceUsd": "0.01888",
+  "txns": {
+   "m5": {
+    "buys": 317,
+    "sells": 294
+   },
+   "h1": {
+    "buys": 5978,
+    "sells": 3865
+   },
+   "h6": {
+    "buys": 37966,
+    "sells": 25351
+   },
+   "h24": {
+    "buys": 219758,
+    "sells": 169179
+   }
+  },
+  "volume": {
+   "h24": 55244610.49,
+   "h6": 9414364.02,
+   "h1": 1090625.39,
+   "m5": 39796.88
+  },
+  "priceChange": {
+   "m5": 1.62,
+   "h1": -6.44,
+   "h6": 65.87,
+   "h24": 18165
+  },
+  "liquidity": {
+   "base": 14943237,
+   "quote": 1314.9806,
+   "usd": 561267.1
+  },
+  "fdv": 17861712,
+  "marketCap": 17861712,
+  "pairCreatedAt": 1792465409000
+ }
+]
