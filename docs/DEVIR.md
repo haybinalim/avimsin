@@ -6,6 +6,9 @@ Son güncelleme: 2026-11-20
 
 - [ ] Robinhood Chain coinleri (0x0bd7…, 0x90a7…) yeniden filter/score bekliyor — Solana işi bitince.
 - [ ] Sıradaki Solana işi: kullanıcı belirleyecek.
+- [ ] MACCA (C5eGEXJZ…) 50/50 erken alıcı `ok` çıktı; elle kontrol et (fazla cömert olabilir).
+- [ ] Sır sızıntısı bakiyesi: `discover.py:246,266,283,364` ham `{exc}` basıyor; anahtarsız API olduğu için şimdilik zararsız, anahtarlı uç eklenirse `describe_error`'a geçir. `redact_urls` yalnız http(s) kapsar.
+- [ ] Tepe mcap keşfi (7 gün ≥ 1M) elle betikle yapıldı; kalıcı istenirse `avimsin-discover`'a kural olarak eklenebilir.
 
 Kasadaki 2026-11-16 notundan taşındı (o tarihten sonra kapanmış olabilir, doğrulanmadı):
 
