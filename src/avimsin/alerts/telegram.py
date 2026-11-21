@@ -6,11 +6,31 @@ Bot token'ı `.env`'den okunur (`TELEGRAM_BOT_TOKEN`); sohbet kimliği
 
 from __future__ import annotations
 
+import re
+
 import httpx
 
 from ..config import settings
 
 API_BASE = "https://api.telegram.org"
+
+_URL_RE = re.compile(r"https?://\S+")
+
+
+def describe_error(exc: BaseException) -> str:
+    """Log/özet için güvenli hata özeti.
+
+    httpx hata mesajları tam URL taşır (Telegram bot token'ı, RPC API anahtarı);
+    bu yüzden mesaj yazdırılmaz: HTTPStatusError -> "HTTP <kod>", diğerleri -> sınıf adı.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        return f"HTTP {exc.response.status_code}"
+    return type(exc).__name__
+
+
+def redact_urls(text: str) -> str:
+    """Metindeki her http(s) URL'ini '<url>' ile maskeler (yol/sorgu anahtar taşıyabilir)."""
+    return _URL_RE.sub("<url>", text)
 
 
 class TelegramClient:
