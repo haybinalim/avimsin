@@ -29,13 +29,11 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from ..chains.protocol import ChainClient
 from ..collectors.transfers import ZERO_ADDRESS, TransferEvent
 from ..config import settings
 from ..filters.chains import blocks_for_seconds, normalize_chain
-from .telegram import TelegramClient
+from .telegram import TelegramClient, describe_error
 
 
 @dataclass(frozen=True)
@@ -240,11 +238,7 @@ def _mark_alerted(conn: sqlite3.Connection, chain: str, signal: Signal, latest: 
     conn.commit()
 
 
-def _describe_error(exc: Exception) -> str:
-    """Hata özeti; Telegram URL'i bot token'ı taşıdığı için mesajı yazdırmaz."""
-    if isinstance(exc, httpx.HTTPStatusError):
-        return f"HTTP {exc.response.status_code}"
-    return type(exc).__name__
+_describe_error = describe_error  # geriye uyum: eski ad
 
 
 class WatchRpcError(RuntimeError):

@@ -26,7 +26,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
-from .alerts.telegram import TelegramClient
+from .alerts.telegram import TelegramClient, describe_error, redact_urls
 from .alerts.watcher import smart_wallets_for_chain
 from .config import settings
 from .filter import SILENT_WARNING_HEAD
@@ -126,7 +126,7 @@ class CoinOutcome:
 def _last_line(output: list[str]) -> str:
     for line in reversed(output):
         if line.strip():
-            return line.strip()[:200]
+            return redact_urls(line.strip())[:200]
     return "çıktı yok"
 
 
@@ -225,7 +225,7 @@ def send_summary(text: str, telegram: TelegramClient | None = None) -> None:
     try:
         client.send_message(text=text)
     except Exception as exc:  # özet gitmediyse sessiz kalma: stdout + stderr
-        print(f"UYARI: Telegram özeti gönderilemedi ({type(exc).__name__}: {exc}); özet:\n" + text,
+        print(f"UYARI: Telegram özeti gönderilemedi ({describe_error(exc)}); özet:\n" + text,
               file=sys.stderr)
 
 
@@ -255,7 +255,7 @@ def run_pipeline(
         try:
             outcome = process_coin(coin, db, timeout_seconds, build, runner)
         except Exception as exc:  # bir coin'in beklenmedik hatası sıradakini engellemesin
-            outcome = CoinOutcome(coin, STATUS_FAILED, f"beklenmedik hata: {type(exc).__name__}: {exc}")
+            outcome = CoinOutcome(coin, STATUS_FAILED, f"beklenmedik hata: {describe_error(exc)}")
         set_status(conn, coin, outcome.status, outcome.reason)
         print(f"{coin}: {outcome.status} — {outcome.reason}", flush=True)
         outcomes.append(outcome)
